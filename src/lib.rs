@@ -23,6 +23,8 @@
 //!   one judged `vvp` run.
 //! - [`verilator`]: the verilator target drives -- one lint, per-top
 //!   model builds, judged model runs.
+//! - [`yosys`]: the yosys synthesis drive -- one script-driven synth per
+//!   top, the netlists as payload. Build only: yosys has no runtime.
 
 pub mod blueprint;
 pub mod contracts;
@@ -31,6 +33,7 @@ pub mod iverilog;
 pub mod nvc;
 pub mod proc;
 pub mod verilator;
+pub mod yosys;
 
 pub use blueprint::{
     parse_blueprint, verilog_only, vhdl_only, BlueprintError, Drive, Entry, MalformedLine, Mode,

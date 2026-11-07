@@ -64,3 +64,8 @@ command = ["orbit-drives", "verilator"]
 name = "verilator-build"
 description = "Verilog/SV builds through verilator: the lint and the per-top model builds only, exit honest -- no simulation, nothing judged; the lint honors only the last --top-module (an unknown non-last top lints clean), and the lint and build exits are honest (exit 1 on a lint error, an unknown top's own build, or an enabled warning)"
 command = ["orbit-drives", "verilator-build"]
+
+[[target]]
+name = "yosys"
+description = "Verilog/SV synthesis through yosys: one script-driven `yosys -p` per top (read every blueprint Verilog file, synth -top, write netlists/<top>.v), the log judged on yosys's probed ERROR: vocabulary AND yosys's exit -- every probed failure exits 1, so the exit convicts and the judge is the second witness. Build only: yosys has no runtime, there is no sim face"
+command = ["orbit-drives", "yosys"]

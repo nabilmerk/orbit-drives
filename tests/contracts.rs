@@ -157,7 +157,13 @@ fn vocabulary_registry() {
     // is the three probed faces, in probed order.
     assert_eq!(
         contracts::tools(),
-        &[Tool::Ghdl, Tool::Nvc, Tool::Iverilog, Tool::Verilator]
+        &[
+            Tool::Ghdl,
+            Tool::Nvc,
+            Tool::Iverilog,
+            Tool::Verilator,
+            Tool::Yosys
+        ]
     );
     assert_eq!(Tool::Ghdl.name(), "ghdl");
     assert_eq!(
@@ -610,4 +616,116 @@ fn ver_vocabulary_is_the_two_probed_faces() {
     // failure face.
     assert_eq!(Tool::Verilator.name(), "verilator");
     assert_eq!(Tool::Verilator.vocabulary(), &["%Error", "%Fatal:"]);
+}
+
+// ===== the yosys vocabulary, probed live on Yosys 0.52, 2026-11-07 =====
+
+// a real yosys syntax failure (`yosys -p "read_verilog broken.v; synth"`,
+// exit 1, stderr): the ERROR marker rides mid-line behind the source
+// location -- the one probed face that is not line-start
+const YOS_SYNTAX_LOG: &str = "\
+1. Executing Verilog-2005 frontend: broken.v
+broken.v:3: ERROR: syntax error, unexpected TOK_ENDMODULE
+";
+
+// the script's refusal of an unknown top (`yosys -p "...; synth -top
+// nosuch; ..."`, exit 1, stderr): line-start, backquoted name
+const YOS_UNKNOWN_TOP_LOG: &str = "\
+ERROR: Module `nosuch' not found!
+";
+
+// the unknown-`-p`-command face (`yosys -p "read_verilog gate.v;
+// frobnicate"`, exit 1, stderr): line-start
+const YOS_UNKNOWN_COMMAND_LOG: &str = "\
+ERROR: No such command: frobnicate (type 'help' for a command overview)
+";
+
+// the failed-write face (`write_verilog` into a missing directory, exit
+// 1, stderr): line-start
+const YOS_FAILED_WRITE_LOG: &str = "\
+ERROR: Can't open output file `netlists-missing/x.v' for writing: No such file or directory
+";
+
+// the missing-provider face (`synth` over an instantiation whose provider
+// was never read, exit 1, stderr): line-start, hierarchical names
+const YOS_NOT_PART_OF_DESIGN_LOG: &str = "\
+ERROR: Module `\\gate' referenced in module `\\top' in cell `\\u_gate' is not part of the design.
+";
+
+// a clean synth's log tail (probed): the command echo and the `End of
+// script` summary -- no ERROR marker anywhere
+const YOS_CLEAN_LOG: &str = "\
+-- Running command `read_verilog gate.v; synth -top gate; write_verilog netlists/gate.v' --
+
+2.27. Executing OPT pass (performing simple optimizations).
+End of script. Logfile hash: 8f1ba39a8d, CPU: user 0.02s system 0.01s, MEM: 17.06 MB peak
+";
+
+// the probed failure logs with the marker drifted to lowercase: not a
+// single yosys face, since yosys spells its marker in uppercase. The
+// gentler neighbor rides too (`Warning:` on a clean synth, probed)
+const YOS_LOWERCASE_DRIFT_LOG: &str = "\
+broken.v:3: error: syntax error, unexpected TOK_ENDMODULE
+ERROR2: Module `nosuch' not found!
+Warning: Re-writing memory cell netlist.
+";
+
+#[test]
+fn yos_syntax_log_judges_fail() {
+    // The probed syntax face judges FAIL: the ERROR marker is mid-line
+    // behind the source location, and the substring search reads it
+    // anyway -- the one probed yosys face that is not line-start.
+    assert!(!contracts::judge(&Tool::Yosys, YOS_SYNTAX_LOG));
+}
+
+#[test]
+fn yos_script_faces_judge_fail() {
+    // The four probed script faces judge FAIL: the unknown top, the
+    // unknown -p command, the failed write, the missing provider. All
+    // line-start; all carry the same uppercase marker.
+    assert!(!contracts::judge(&Tool::Yosys, YOS_UNKNOWN_TOP_LOG));
+    assert!(!contracts::judge(&Tool::Yosys, YOS_UNKNOWN_COMMAND_LOG));
+    assert!(!contracts::judge(&Tool::Yosys, YOS_FAILED_WRITE_LOG));
+    assert!(!contracts::judge(&Tool::Yosys, YOS_NOT_PART_OF_DESIGN_LOG));
+}
+
+#[test]
+fn yos_clean_log_judges_pass() {
+    // A clean synth log judges PASS.
+    assert!(contracts::judge(&Tool::Yosys, YOS_CLEAN_LOG));
+}
+
+#[test]
+fn yos_lowercase_drift_never_matches() {
+    // A lowercase drift of the syntax face judges PASS (yosys spells its
+    // marker uppercase, case-exactly). The near-miss `ERROR2:` line
+    // judges PASS too: the face is `ERROR:`, with the colon.
+    assert!(contracts::judge(&Tool::Yosys, YOS_LOWERCASE_DRIFT_LOG));
+}
+
+#[test]
+fn yos_each_face_alone_judges_fail() {
+    // The one yosys face judges FAIL on its own, in an otherwise clean
+    // log.
+    for face in Tool::Yosys.vocabulary() {
+        let log = format!("End of script. Logfile hash: 8f1ba39a8d\nnoise {face} tail\n");
+        assert!(
+            !contracts::judge(&Tool::Yosys, &log),
+            "face {face:?} did not judge its log"
+        );
+    }
+}
+
+#[test]
+fn yos_empty_log_judges_pass() {
+    // An empty log carries no failure face, so it judges PASS.
+    assert!(contracts::judge(&Tool::Yosys, ""));
+}
+
+#[test]
+fn yos_vocabulary_is_the_one_probed_face() {
+    // yosys's vocabulary is the single probed `ERROR:` marker: it covers
+    // every probed failure face, line-start and mid-line alike.
+    assert_eq!(Tool::Yosys.name(), "yosys");
+    assert_eq!(Tool::Yosys.vocabulary(), &["ERROR:"]);
 }

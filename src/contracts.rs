@@ -193,6 +193,28 @@ pub const VERILATOR_VOCABULARY: &[&str] = &[
     "%Fatal:",
 ];
 
+/// yosys's failure faces, probed live on Yosys 0.52 (2026-11-07, `yosys
+/// -p "read_verilog broken.v; synth"` and siblings): every probed failure
+/// face carries the uppercase `ERROR:` marker -- line-start for the
+/// script faces (`ERROR: Module \`nosuch' not found!` under a `synth
+/// -top` naming no module, `ERROR: No such command: frobnicate ...` under
+/// an unknown `-p` command, `ERROR: Can't open output file ... for
+/// writing` under a failed netlist write, `ERROR: Module \`\gate'
+/// referenced in module `\top' ... is not part of the design` under an
+/// instantiation whose provider was never read) and mid-line for the
+/// frontend's syntax face, which leads with the source location
+/// (`broken.v:3: ERROR: syntax error, unexpected TOK_ENDMODULE`). yosys
+/// writes its whole log to stdout and its failure faces to stderr; the
+/// drive joins the streams, so the face reads either way. The exit is
+/// honest so far as probed: every probed failure exits 1 -- a script
+/// error aborts the whole `-p` script before the next command runs -- so
+/// the judge is the second witness on this build-only drive, the exit
+/// the first. The gentler neighbor (`Warning:` lines on a clean synth,
+/// probed) is not a failure and stays out. Case-exact: yosys spells its
+/// marker in uppercase, so a lowercase drift (`error:`) is not one of
+/// its faces and never judges a log.
+pub const YOSYS_VOCABULARY: &[&str] = &["ERROR:"];
+
 /// A tool carrying a probed failure vocabulary.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub enum Tool {
@@ -205,6 +227,8 @@ pub enum Tool {
     Iverilog,
     /// The Verilator lint and model builder (Verilog/SV only).
     Verilator,
+    /// The yosys synthesis engine (`yosys`, Verilog/SV synthesis only).
+    Yosys,
 }
 
 /// The error for a tool name that resolves to nothing in the registry.
@@ -236,6 +260,7 @@ impl Tool {
             Tool::Nvc => "nvc",
             Tool::Iverilog => "iverilog",
             Tool::Verilator => "verilator",
+            Tool::Yosys => "yosys",
         }
     }
 
@@ -247,6 +272,7 @@ impl Tool {
             Tool::Nvc => NVC_VOCABULARY,
             Tool::Iverilog => IVERILOG_VOCABULARY,
             Tool::Verilator => VERILATOR_VOCABULARY,
+            Tool::Yosys => YOSYS_VOCABULARY,
         }
     }
 }
@@ -268,7 +294,13 @@ impl FromStr for Tool {
 
 /// The registry: every tool carrying a probed failure vocabulary.
 pub fn tools() -> &'static [Tool] {
-    &[Tool::Ghdl, Tool::Nvc, Tool::Iverilog, Tool::Verilator]
+    &[
+        Tool::Ghdl,
+        Tool::Nvc,
+        Tool::Iverilog,
+        Tool::Verilator,
+        Tool::Yosys,
+    ]
 }
 
 /// Judge a tool's log text against its probed failure vocabulary.

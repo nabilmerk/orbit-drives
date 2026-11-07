@@ -20,7 +20,7 @@ use std::env;
 use std::path::PathBuf;
 use std::process::ExitCode;
 
-use orbit_drives::{blueprint, ghdl, iverilog, nvc, verilator};
+use orbit_drives::{blueprint, ghdl, iverilog, nvc, verilator, yosys};
 
 const USAGE: &str = "\
 orbit-drives: the probed failure vocabularies and the honest-exit targets for orbit
@@ -65,6 +65,14 @@ SUBCOMMANDS:
                  its own per-top build: verilator honors only the LAST
                  --top-module on the lint, so an unknown top fails its
                  build with exit 1 (the verilator build face)
+    yosys        synthesize the blueprint's Verilog per top (one
+                 script-driven `yosys -p` per top: read every file,
+                 synth -top, write netlists/<top>.v), exit honest; the
+                 log is judged against yosys's probed failure vocabulary
+                 AND yosys's exit -- every probed failure exits 1, so
+                 the exit convicts and the judge is the second witness.
+                 Build only: yosys has no runtime, there is no sim face
+                 and nothing runs
 
 SHARED OPTIONS:
     --blueprint <path>  the TSV blueprint (default: $ORBIT_BLUEPRINT)
@@ -123,6 +131,9 @@ enum Subcommand {
     /// `verilator`: verilator's sim face -- lint, per-top builds, then
     /// the judged model runs.
     VerilatorSim,
+    /// `yosys`: the synthesis face -- one script-driven synth per top,
+    /// the netlists as payload. Build only: there is no sim face.
+    Yosys,
 }
 
 impl Subcommand {
@@ -133,7 +144,10 @@ impl Subcommand {
             Subcommand::GhdlBuild
             | Subcommand::NvcBuild
             | Subcommand::IverilogBuild
-            | Subcommand::VerilatorBuild => blueprint::Mode::Build,
+            | Subcommand::VerilatorBuild
+            // yosys is build-only; the arm exists for match totality --
+            // its drive takes no mode, so this value is never read.
+            | Subcommand::Yosys => blueprint::Mode::Build,
             Subcommand::GhdlSim
             | Subcommand::NvcSim
             | Subcommand::IverilogSim
@@ -147,7 +161,7 @@ impl Subcommand {
 fn unknown_subcommand(name: &str) -> String {
     format!(
         "no target named {name:?}: carried subcommands: ghdl, ghdl-build, nvc, nvc-build, \
-         iverilog, iverilog-build, verilator, verilator-build"
+         iverilog, iverilog-build, verilator, verilator-build, yosys"
     )
 }
 
@@ -194,6 +208,7 @@ fn parse(argv: &[String]) -> Result<Cli, CliError> {
         "iverilog" => Subcommand::IverilogSim,
         "verilator-build" => Subcommand::VerilatorBuild,
         "verilator" => Subcommand::VerilatorSim,
+        "yosys" => Subcommand::Yosys,
         other => return Err(CliError(unknown_subcommand(other))),
     };
 
@@ -332,6 +347,12 @@ fn drive_request(request: Request) -> ExitCode {
             },
             request.subcommand.mode(),
         )
+        .map_err(|e| e.exit_code()),
+        Subcommand::Yosys => yosys::drive(&blueprint::Drive {
+            blueprint,
+            tops,
+            extra: request.extra,
+        })
         .map_err(|e| e.exit_code()),
     };
     match outcome {
@@ -480,6 +501,16 @@ mod tests {
         let request = run_of(parse(&argv(&["verilator", "--top", "tb"])).unwrap());
         assert_eq!(request.subcommand, Subcommand::VerilatorSim);
         assert_eq!(request.subcommand.mode(), blueprint::Mode::Sim);
+    }
+
+    #[test]
+    fn yosys_is_its_own_subcommand_driving_the_synthesis_face() {
+        // The single face: `yosys` is the synthesis drive, build only --
+        // there is no `yosys-build` and no sim face. The mode() arm
+        // exists for match totality and is never read by the drive.
+        let request = run_of(parse(&argv(&["yosys", "--top", "top"])).unwrap());
+        assert_eq!(request.subcommand, Subcommand::Yosys);
+        assert_eq!(request.subcommand.mode(), blueprint::Mode::Build);
     }
 
     #[test]

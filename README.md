@@ -85,6 +85,11 @@ Subcommands (one per orbit target entry):
   own per-top build -- the lint honors only the LAST `--top-module`
   (probed: an unknown non-last top lints clean, exit 0), and an unknown
   top fails its build loudly.
+- `yosys` -- the yosys synthesis face: one script-driven `yosys -p` per
+  top (read every blueprint Verilog file, `synth -top`, write
+  `netlists/<top>.v`), the log judged on yosys's probed `ERROR:`
+  vocabulary and the exit. Build only: yosys has no runtime, there is no
+  sim face and nothing runs.
 
 Options:
 
@@ -234,6 +239,43 @@ verilator's probed process. The differences the probes wrote down:
   (`%Warning-WIDTHTRUNC ...` still exits 1 under `-Wall` and even under
   `-Wwarn-`, probed live), so a warning face never rides an exit-0 lint.
 
+## The yosys drive
+
+ONE target entry (`yosys`) drives yosys -- build only, the synthesis
+face: yosys is a synthesis engine with no runtime, so there is no sim
+face, no run, and the drive's whole output is the per-top netlist and
+its exit. The shapes the probes wrote down:
+
+- **No deferral loop, on probed grounds.** yosys reads all files into
+  one design and elaborates at `synth` time: a consumer-before-provider
+  pair synthesized clean (probed live on Yosys 0.52, 2026-11-07). One
+  script per top, no passes -- the machinery the stateful VHDL backends
+  need has nothing to do here.
+- **One script-driven process per top.** `yosys -p "read_verilog <files>;
+  synth -top <top>; write_verilog netlists/<top>.v"` -- yosys runs the
+  script left to right and aborts on the first error, so the netlist is
+  written only on a fully clean synth. The script validates its top
+  (`ERROR: Module \`nosuch' not found!`, exit 1, probed), and each top
+  gets a fresh process because `synth` consumes the design it runs on --
+  a second top could not synthesize over the first one's mapped netlist.
+- **The exit is the first witness, the judge the second.** yosys's exit
+  is honest so far as probed: every probed failure exits 1 (a script
+  error aborts the whole `-p` script). The judge stays the gate because
+  the exit cannot name the face; either witness convicts.
+- **The streams split.** yosys writes its whole synthesis log to stdout
+  and its failure faces to stderr (probed); the drive joins the streams,
+  so the face reads either way. The full log relays only on failure --
+  on success the drive reports the netlist, not seventeen kilobytes of
+  synthesis log.
+- **The netlist directory (`netlists/`) is wiped and recreated before
+  every drive** -- the same correctness-before-incrementality stance,
+  though probed honestly: a failed synth exits 1 before its netlist
+  could be mistaken for fresh, so the wipe is symmetry here, not
+  load-bearing.
+- **VHDL rides nothing.** yosys is a Verilog synthesis engine; the
+  blueprint's `VHDL` entries are the loud not-carried face (exit 2),
+  the same door verilator closes.
+
 ## The probed facts
 
 Every pattern in a vocabulary and every drive fact below was probed live
@@ -324,15 +366,33 @@ And as with the other tools, a testbench's own `$display` that embeds a
 verilator face shape (`%Error: retrying`) convicts the run -- keep
 `$display` text free of face shapes.
 
+### yosys 0.52
+
+| face / fact | argv that wrote it | what yosys did |
+|------|-----|------|
+| `broken.v:3: ERROR: syntax error, unexpected TOK_ENDMODULE` (stderr) | `yosys -p "read_verilog broken.v; synth"` (same through the drive) | the frontend's syntax face, exit 1 -- the `ERROR:` marker rides mid-line behind the source location |
+| `ERROR: Module \`nosuch' not found!` (stderr) | `yosys -p "read_verilog top.v gate.v; synth -top nosuch; write_verilog netlists/nosuch.v"` | the script's refusal of an unknown top, exit 1 -- the `-p` script aborts and no netlist is written |
+| `ERROR: No such command: frobnicate (type 'help' for a command overview)` (stderr) | `yosys -p "read_verilog gate.v; frobnicate"` | the unknown-`-p`-command face, exit 1 |
+| `ERROR: Can't open output file \`netlists-missing/x.v' for writing: No such file or directory` (stderr) | `yosys -p "...; write_verilog netlists-missing/x.v"` | the failed-write face, exit 1 -- a late failure still convicts |
+| `ERROR: Module \`\gate' referenced in module `\top' in cell `\u_gate' is not part of the design.` (stderr) | `yosys -p "read_verilog top.v; synth -top top; ..."` with `gate.v` never read | the missing-provider face, exit 1 -- `synth`'s hierarchy check catches an instantiation whose provider was never read; no silent blackbox degradation |
+| log on stdout, exit 0, `netlists/top.v` written | `yosys -p "read_verilog gate.v; synth; write_verilog netlists/top.v"` | the clean synth: the whole synthesis log rides stdout, the netlist lands |
+| consumer-first synth exits 0 | `yosys -p "read_verilog top.v gate.v; synth -top top; write_verilog ..."` (consumer before provider) | **order-free** -- yosys reads all files into one design and elaborates at `synth` time; no deferral loop |
+
+yosys's marker is case-exact uppercase (`ERROR:`), line-start on the
+script faces and mid-line behind the source location on the frontend's
+syntax face; a lowercase drift (`error:`) is not one of its faces and
+never judges a log. The log rides stdout and the failure faces stderr;
+the drive joins the streams, so the face reads either way.
+
 ## Honest limits
 
 - **The filesets are per tool.** The VHDL drives (`ghdl`, `nvc`) carry
-  the `VHDL` fileset only; the Verilog drives (`iverilog`, `verilator`)
-  carry `VLOG` and `SYSV` (their native filesets) and reject `VHDL` and
-  custom filesets with a loud exit-2 ("not yet carried"), never a silent
-  skip. Mixed-language designs stay out of the contract.
-- **Four tool names, four vocabularies: ghdl, nvc, iverilog, verilator.**
-  Any other tool name is a loud error at the CLI, never a guess.
+  the `VHDL` fileset only; the Verilog drives (`iverilog`, `verilator`,
+  `yosys`) carry `VLOG` and `SYSV` (their native filesets) and reject
+  `VHDL` and custom filesets with a loud exit-2 ("not yet carried"),
+  never a silent skip. Mixed-language designs stay out of the contract.
+- **Five tool names, five vocabularies: ghdl, nvc, iverilog, verilator,
+  yosys.** Any other tool name is a loud error at the CLI, never a guess.
 - **The library column is carried, not mapped.** Every file analyzes
   into the tool's `work` library (ghdl's `work-obj08.cf` clock, nvc's
   `work/` directory), compiles into iverilog's one snapshot, or lints
@@ -343,8 +403,9 @@ verilator face shape (`%Error: retrying`) convicts the run -- keep
   flags are `--timing` and the face flags -- its language setting stays
   verilator's default in v1) and cannot be overridden from the argv yet;
   the extras reach the drive's last step only (`-r` on the VHDL sim
-  faces, `vvp` on iverilog's, the model argv on verilator's; the
-  elaboration / compile / build argv on the build faces).
+  faces, `vvp` on iverilog's, the model argv on verilator's, the
+  `yosys -p` synth argv on yosys's; the elaboration / compile / build
+  argv on the build faces).
 - **The state is run-scoped, not incremental.** Every drive wipes its
   clock first (the work libraries; iverilog's snapshot; verilator's
   `obj_dir`). A large design pays a full re-analysis per drive;
@@ -389,11 +450,12 @@ verilator face shape (`%Error: retrying`) convicts the run -- keep
 ```sh
 cargo test            # the contract, drive, and argv suites
 cargo test -- --ignored   # + the real-spawn tests: the real binary, real
-                          # ghdl, nvc, iverilog, and verilator, the real
-                          # orbit spawn shape, order-dependent blueprints
-                          # through the deferral loop, judged severity
-                          # failures and $fatal/$error calls, twice in
-                          # one output directory, and the build faces
+                          # ghdl, nvc, iverilog, verilator, and yosys, the
+                          # real orbit spawn shape, order-dependent
+                          # blueprints through the deferral loop, judged
+                          # severity failures and $fatal/$error calls,
+                          # twice in one output directory, and the build
+                          # faces
 ```
 
 The contract suite (`tests/contracts.rs`) ports the aquila contract tests
