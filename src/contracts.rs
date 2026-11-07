@@ -116,6 +116,9 @@ pub fn tools() -> &'static [Tool] {
 
 /// Judge a tool's log text against its probed failure vocabulary.
 ///
+/// Polarity: `true` is clean, `false` is findings -- the judge answers "is
+/// this log clean?", never "did this fail?".
+///
 /// Returns `true` when the log is clean -- no failure face appears in it --
 /// and `false` when any face is present. For ghdl this reads the probed
 /// faces and nothing else: the gentler continuation faces (`(assertion

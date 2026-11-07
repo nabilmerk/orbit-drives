@@ -276,16 +276,24 @@ pub struct RunOutcome {
 }
 
 impl RunOutcome {
-    /// The gate: `true` when the log carries no probed ghdl failure face.
+    /// `true` when the log carries a probed ghdl failure face.
+    pub fn has_face(&self) -> bool {
+        !contracts::judge(&Tool::Ghdl, &self.log)
+    }
+
+    /// The gate: `true` when the run is clean -- no probed failure face in
+    /// the log AND ghdl exited 0.
     ///
-    /// The judge is the gate, not the exit. ghdl exits honestly on a
-    /// `severity failure` stop (1), but a violated `severity error` check
-    /// exits 0 -- probed live on ghdl 6.0.0 -- so an exit gate alone would
-    /// pass a failing run. The reverse hole (a nonzero exit with a clean
-    /// log, a crash face) is a recorded v1 limit: the vocabulary carries
-    /// only probed faces, and the exit stays secondary.
+    /// Either witness convicts. The face catches what the exit cannot see:
+    /// bare ghdl exits 0 on a violated `severity error` check (probed live
+    /// on ghdl 6.0.0), and there the face is the only witness. The exit
+    /// catches what the log cannot name: a killed or crashed simulation
+    /// can exit nonzero without writing any probed face, and a clean log
+    /// must not green-light it. The drive also pins
+    /// `--assert-level=error` onto the run argv, so a severity-error stop
+    /// lands with a nonzero exit too -- the two witnesses agree there.
     pub fn clean(&self) -> bool {
-        contracts::judge(&Tool::Ghdl, &self.log)
+        !self.has_face() && self.exit == 0
     }
 }
 
@@ -476,15 +484,15 @@ pub fn drive(request: &Drive) -> Result<(), DriveError> {
         };
         if outcome.clean() {
             println!("orbit-contracts: ghdl: {top}: pass");
-            if outcome.exit != 0 {
-                eprintln!(
-                    "orbit-contracts: ghdl: note: ghdl exited {} for {top} but its log judges clean; the exit stays secondary",
-                    outcome.exit
-                );
-            }
-        } else {
+        } else if outcome.has_face() {
             println!(
                 "orbit-contracts: ghdl: {top}: fail (the log carries a probed ghdl failure face)"
+            );
+            findings.push(outcome);
+        } else {
+            println!(
+                "orbit-contracts: ghdl: {top}: fail (ghdl exited {} without a judged face)",
+                outcome.exit
             );
             findings.push(outcome);
         }
@@ -494,7 +502,7 @@ pub fn drive(request: &Drive) -> Result<(), DriveError> {
         Ok(())
     } else {
         eprintln!(
-            "orbit-contracts: ghdl: error: {} run(s) carried a ghdl failure face",
+            "orbit-contracts: ghdl: error: {} run(s) carried a finding",
             findings.len()
         );
         Err(DriveError::Findings(findings))
@@ -714,19 +722,6 @@ tb_err.vhd:9:5:@0ms:(report note): simulation continued
     }
 
     #[test]
-    fn the_judge_is_the_gate_on_a_severity_error_run() {
-        // Probed live on ghdl 6.0.0 (2026-11-07): the violated check
-        // exits 0 -- the honest exit would pass it. The verdict reads the
-        // log, where the face lands.
-        let outcome = RunOutcome {
-            top: "tb_err".to_string(),
-            exit: 0,
-            log: SEVERITY_ERROR_LOG.to_string(),
-        };
-        assert!(!outcome.clean());
-    }
-
-    #[test]
     fn a_clean_run_log_passes_the_gate() {
         let outcome = RunOutcome {
             top: "tb_pass".to_string(),
@@ -734,6 +729,35 @@ tb_err.vhd:9:5:@0ms:(report note): simulation continued
             log: "tb_pass.vhd:7:5:@0ms:(report note): all checks passed\n".to_string(),
         };
         assert!(outcome.clean());
+    }
+
+    #[test]
+    fn a_crashed_run_is_a_finding_on_its_exit_alone() {
+        // The crash door: a killed or crashed sim can exit nonzero without
+        // writing any probed face, and a clean log must not green-light
+        // it. Either witness convicts.
+        let outcome = RunOutcome {
+            top: "tb_crash".to_string(),
+            exit: 137,
+            log: "tb_crash.vhd:7:5:@0ms:(report note): sim done\n".to_string(),
+        };
+        assert!(!outcome.has_face());
+        assert!(!outcome.clean());
+    }
+
+    #[test]
+    fn a_face_convicts_an_exit_zero_run() {
+        // The judge catches what the exit cannot see: bare ghdl exits 0
+        // on a violated `severity error` check, probed live on ghdl 6.0.0
+        // (2026-11-07). The verdict reads the log, where the face lands.
+        let outcome = RunOutcome {
+            top: "tb_err".to_string(),
+            exit: 0,
+            log: SEVERITY_ERROR_LOG.to_string(),
+        };
+        assert_eq!(outcome.exit, 0);
+        assert!(outcome.has_face());
+        assert!(!outcome.clean());
     }
 
     #[test]
