@@ -28,6 +28,12 @@
 //! - [`vivado`]: the vivado target drives -- both languages compiled,
 //!   the generated synthesis with the catch-guard, and the judged xsim
 //!   runs (the run exit is a lie; the line-start faces are the truth).
+//! - [`quartus`]: the quartus target drives -- the DOCUMENTED-ONLY
+//!   drive: the generated `.qsf` + the batch `quartus_map` on the build
+//!   face, the bundled Questa (vlib/vmap/vcom/vsim) on the judged sim
+//!   face. Every face is the documented hypothesis, UNPROBED -- no
+//!   quartus on the probing box; every hypothesis carries its
+//!   first-contact rule in the README's honest limits.
 
 pub mod blueprint;
 pub mod contracts;
@@ -35,11 +41,12 @@ pub mod ghdl;
 pub mod iverilog;
 pub mod nvc;
 pub mod proc;
+pub mod quartus;
 pub mod verilator;
 pub mod vivado;
 pub mod yosys;
 
 pub use blueprint::{
-    parse_blueprint, verilog_only, vhdl_only, vivado_files, BlueprintError, Drive, Entry,
-    MalformedLine, Mode, NotCarried,
+    parse_blueprint, quartus_files, verilog_only, vhdl_only, vivado_files, BlueprintError, Drive,
+    Entry, MalformedLine, Mode, NotCarried,
 };

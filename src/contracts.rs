@@ -27,17 +27,21 @@
 //! violated severity error -- so there the judge is not the second
 //! witness, it is the only one.
 //!
-//! Matching is case-exact, and exactly one vocabulary is line-anchored.
-//! Every face searches as a plain substring because the tools write
-//! their faces mid-line: ghdl opens its failure lines with the offending
-//! file path or the image name, not with the severity; nvc leads every
-//! diagnostic with its own `** Severity:` marker; yosys's syntax face
-//! carries its marker behind the source location. Vivado's xsim is the
-//! exception that wrote the rule: its run faces LEAD their lines with
-//! the bare marker (`Failure: the design is wrong`), and its probed
-//! negative pins -- a case drift (`FATAL:`) and a marker mid-line -- hold
-//! only if the search anchors on the line start
-//! ([`Tool::line_anchored`]).
+//! Matching is case-exact, and exactly two vocabularies are
+//! line-anchored. Every face searches as a plain substring because the
+//! tools write their faces mid-line: ghdl opens its failure lines with
+//! the offending file path or the image name, not with the severity; nvc
+//! leads every diagnostic with its own `** Severity:` marker; yosys's
+//! syntax face carries its marker behind the source location. Vivado's
+//! xsim is the exception that wrote the rule: its run faces LEAD their
+//! lines with the bare marker (`Failure: the design is wrong`), and its
+//! probed negative pins -- a case drift (`FATAL:`) and a marker mid-line
+//! -- hold only if the search anchors on the line start
+//! ([`Tool::line_anchored`]). Quartus's bundled Questa rides the same
+//! anchor on the ModelSim-family hypothesis -- the family renders its
+//! severities at line start -- recorded UNPROBED with the rest of that
+//! drive (quartus is not installed on the probing box; every hypothesis
+//! carries its first-contact rule in the crate README's honest limits).
 
 use std::fmt;
 use std::str::FromStr;
@@ -259,6 +263,23 @@ pub const YOSYS_VOCABULARY: &[&str] = &["ERROR:"];
 /// fired in this pass's own probes.
 pub const VIVADO_VOCABULARY: &[&str] = &["Fatal:", "Error:", "Failure:"];
 
+/// Quartus's bundled Questa failure faces, DOCUMENTED-ONLY -- the one
+/// vocabulary in this registry whose patterns are NOT probed, because
+/// quartus is not installed on the probing box. The faces are the
+/// ModelSim-family hypothesis: the family (Questa/ModelSim/qrun) renders
+/// its severities as mixed-case markers that LEAD their lines --
+/// `Fatal:`, `Error:`, `Failure:` -- the same shapes the sibling xsim
+/// drive judges line-anchored, and the same negative pins are
+/// hypothesized: a case drift (`FATAL:`) and a marker mid-line are not
+/// Questa's faces and never judge a log. Every one of these sentences is
+/// a hypothesis carrying its first-contact rule (see the README's honest
+/// limits): on the first quartus box, the owner probes the real failing
+/// faces and rewrites this vocabulary from the live logs -- the marker
+/// spellings, the anchor, and the exit honesty alike. Until then the
+/// drive ships documented, its targets gate on the exit AND this
+/// vocabulary, and neither witness is trusted alone.
+pub const QUARTUS_VOCABULARY: &[&str] = &["Fatal:", "Error:", "Failure:"];
+
 /// A tool carrying a probed failure vocabulary.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub enum Tool {
@@ -276,6 +297,11 @@ pub enum Tool {
     /// The Vivado toolchain -- xvhdl/xvlog/xelab/xsim and the batch
     /// synthesizer (`vivado`, VHDL and Verilog/SV).
     Vivado,
+    /// The Quartus toolchain -- the batch synthesizer `quartus_map` and
+    /// the bundled Questa (vlib/vmap/vcom/vsim), DOCUMENTED-ONLY: the
+    /// vocabulary is the ModelSim-family hypothesis, unprobed (no
+    /// quartus on the probing box).
+    Quartus,
 }
 
 /// The error for a tool name that resolves to nothing in the registry.
@@ -309,6 +335,7 @@ impl Tool {
             Tool::Verilator => "verilator",
             Tool::Yosys => "yosys",
             Tool::Vivado => "vivado",
+            Tool::Quartus => "quartus",
         }
     }
 
@@ -322,21 +349,25 @@ impl Tool {
             Tool::Verilator => VERILATOR_VOCABULARY,
             Tool::Yosys => YOSYS_VOCABULARY,
             Tool::Vivado => VIVADO_VOCABULARY,
+            Tool::Quartus => QUARTUS_VOCABULARY,
         }
     }
 
     /// Whether the tool's faces judge only at line start.
     ///
-    /// Vivado is the one `true` here, and it is the reason this method
-    /// exists: xsim's run faces lead their lines with the bare marker
-    /// (`Failure: the design is wrong`), and the probed negative pins --
-    /// a case drift (`FATAL:`) and a marker mid-line -- hold only if the
-    /// search anchors on the line start. Every other tool writes faces
-    /// the substring search must read wherever they land: ghdl's faces
-    /// open with the file path, yosys's syntax face carries its marker
-    /// behind the source location.
+    /// Vivado is the probed `true` here, and it is the reason this
+    /// method exists: xsim's run faces lead their lines with the bare
+    /// marker (`Failure: the design is wrong`), and the probed negative
+    /// pins -- a case drift (`FATAL:`) and a marker mid-line -- hold
+    /// only if the search anchors on the line start. Quartus's bundled
+    /// Questa rides the same anchor on the ModelSim-family hypothesis,
+    /// UNPROBED with the rest of that drive. Every other tool writes
+    /// faces the substring search must read wherever they land: ghdl's
+    /// faces open with the file path, yosys's syntax face carries its
+    /// marker behind the source location, and cocotb's ` FAIL ` row
+    /// column sits mid-line between the space-padded table columns.
     pub fn line_anchored(self) -> bool {
-        matches!(self, Tool::Vivado)
+        matches!(self, Tool::Vivado | Tool::Quartus)
     }
 }
 
@@ -355,7 +386,9 @@ impl FromStr for Tool {
     }
 }
 
-/// The registry: every tool carrying a probed failure vocabulary.
+/// The registry: every tool carrying a failure vocabulary -- probed
+/// except quartus, whose faces ride the documented-only ModelSim-family
+/// hypothesis until the first quartus box rewrites them from live logs.
 pub fn tools() -> &'static [Tool] {
     &[
         Tool::Ghdl,
@@ -364,6 +397,7 @@ pub fn tools() -> &'static [Tool] {
         Tool::Verilator,
         Tool::Yosys,
         Tool::Vivado,
+        Tool::Quartus,
     ]
 }
 
@@ -380,9 +414,11 @@ pub fn tools() -> &'static [Tool] {
 /// clean, and an empty log is clean.
 ///
 /// The search follows the tool's own anchors: substring everywhere,
-/// except vivado, whose faces judge only where a line LEADS with the
-/// marker -- the probed negative pins (a case drift at line start, a
-/// marker mid-line) hold only line-anchored ([`Tool::line_anchored`]).
+/// except the two line-anchored vocabularies, whose faces judge only
+/// where a line LEADS with the marker -- vivado's probed negative pins
+/// (a case drift at line start, a marker mid-line) hold only
+/// line-anchored, and quartus rides the same anchor on its
+/// documented-only hypothesis ([`Tool::line_anchored`]).
 ///
 /// The search short-circuits: the first face present decides the verdict.
 pub fn judge(tool: &Tool, log: &str) -> bool {

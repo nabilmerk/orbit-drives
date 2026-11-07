@@ -20,7 +20,7 @@ use std::env;
 use std::path::PathBuf;
 use std::process::ExitCode;
 
-use orbit_drives::{blueprint, ghdl, iverilog, nvc, verilator, vivado, yosys};
+use orbit_drives::{blueprint, ghdl, iverilog, nvc, quartus, verilator, vivado, yosys};
 
 const USAGE: &str = "\
 orbit-drives: the probed failure vocabularies and the honest-exit targets for orbit
@@ -90,15 +90,36 @@ SUBCOMMANDS:
                  probed runtime failures (a severity failure AND a
                  severity error), so the judge is the load-bearing gate
                  (the vivado sim face)
+    quartus-build
+                 the DOCUMENTED-ONLY build face: per top a GENERATED
+                 .qsf (DEVICE from --part, TOP_LEVEL_ENTITY, one
+                 VHDL_FILE / VERILOG_FILE line per blueprint file) and
+                 one batch `quartus_map --read_settings_files=off
+                 --write_settings_files=off <top> -c <top>`, exit honest;
+                 no simulation and nothing judged -- the exit honesty is
+                 the documented hypothesis (honest nonzero on failure,
+                 UNPROBED). Requires --part BEFORE any drive (exit 2 at
+                 the CLI: DEVICE names the fabric the map targets)
+                 (the quartus build face; UNPROBED -- see the README's
+                 honest limits)
+    quartus      the DOCUMENTED-ONLY sim face: the bundled Questa --
+                 vlib work, vmap work work, vcom -2008 -work work per
+                 VHDL file through the deferral loop, then per top
+                 `vsim -c -do \"run -all; quit\" -L work work.<top>`,
+                 every run log gated on the hypothesized ModelSim-family
+                 LINE-START vocabulary (Fatal:/Error:/Failure:, UNPROBED)
+                 AND the exit (vsim honest, UNPROBED) -- neither witness
+                 is trusted alone (the quartus sim face; UNPROBED)
 
 SHARED OPTIONS:
     --blueprint <path>  the TSV blueprint (default: $ORBIT_BLUEPRINT)
     --top <name>        a top unit to elaborate (and run: the sim
                         faces); repeatable
-    --part <part>       the FPGA part vivado-build synthesizes for
+    --part <part>       the FPGA part the build faces synthesize for
                         (e.g. xc7z010clg400-1); REQUIRED on vivado-build
-                        (exit 2 without it), rejected on every other
-                        face (loud exit-2: this flag is that face's)
+                        and quartus-build (exit 2 without it), rejected
+                        on every other face (loud exit-2: this flag is
+                        those faces')
     -h, --help          print this help
 
 TOPS:
@@ -108,13 +129,14 @@ TOPS:
 
 EXTRAS:
     every other argument rides the drive's LAST tool argv verbatim: the
-    `ghdl -r` / `nvc -r` / `vvp` / model / xsim argv on the sim faces,
-    the `ghdl -e` / `nvc -e` / `iverilog` compile / verilator build /
-    `yosys -p` synth / `vivado -mode batch` argv on the build faces
-    (there is no run to carry them, and a dropped argument would be a
-    silent degradation). Orbit strips its own `--` separator and appends
-    the extras straight onto this argv, so `orbit test --target ghdl --
-    -gW=4 --vcd=w.vcd` passes both through to ghdl
+    `ghdl -r` / `nvc -r` / `vvp` / model / xsim / vsim argv on the sim
+    faces, the `ghdl -e` / `nvc -e` / `iverilog` compile / verilator
+    build / `yosys -p` synth / `vivado -mode batch` / `quartus_map`
+    argv on the build faces (there is no run to carry them, and a
+    dropped argument would be a silent degradation). Orbit strips its
+    own `--` separator and appends the extras straight onto this argv,
+    so `orbit test --target ghdl -- -gW=4 --vcd=w.vcd` passes both
+    through to ghdl
 
 VIVADO ON THIS BOX:
     every vivado-family spawn needs the launch recipe env -- the drive
@@ -123,6 +145,15 @@ VIVADO ON THIS BOX:
     the binaries resolve from $VIVADO_BIN (the install path), the stage
     binaries (xvhdl/xvlog/xelab/xsim) riding beside it. See the README's
     launch-recipe section
+
+QUARTUS IS DOCUMENTED-ONLY:
+    the quartus faces carry the documented CLI hypotheses, never probed
+    (no quartus on the probing box): the binaries resolve from
+    $QUARTUS_BIN, the bundled Questa (vlib/vmap/vcom/vsim) deriving as
+    the questa_fse/bin sibling, bare PATH names the fallback. Every
+    hypothesis carries its first-contact rule in the README's honest
+    limits; the drive is gated and double-keyed until the first quartus
+    box probes the real faces
 
 EXITS:
     0    clean (every run judged clean, or every top elaborated clean)
@@ -170,6 +201,12 @@ enum Subcommand {
     /// `vivado`: vivado's sim face -- the compile, then the judged
     /// xelab + xsim runs.
     VivadoSim,
+    /// `quartus-build`: quartus's build face -- the generated `.qsf` and
+    /// the batch `quartus_map` per top. DOCUMENTED-ONLY, UNPROBED.
+    QuartusBuild,
+    /// `quartus`: quartus's sim face -- the bundled Questa's vlib/vmap/
+    /// vcom compile and the judged vsim runs. DOCUMENTED-ONLY, UNPROBED.
+    QuartusSim,
 }
 
 impl Subcommand {
@@ -182,6 +219,7 @@ impl Subcommand {
             | Subcommand::IverilogBuild
             | Subcommand::VerilatorBuild
             | Subcommand::VivadoBuild
+            | Subcommand::QuartusBuild
             // yosys is build-only; the arm exists for match totality --
             // its drive takes no mode, so this value is never read.
             | Subcommand::Yosys => blueprint::Mode::Build,
@@ -189,7 +227,8 @@ impl Subcommand {
             | Subcommand::NvcSim
             | Subcommand::IverilogSim
             | Subcommand::VerilatorSim
-            | Subcommand::VivadoSim => blueprint::Mode::Sim,
+            | Subcommand::VivadoSim
+            | Subcommand::QuartusSim => blueprint::Mode::Sim,
         }
     }
 }
@@ -199,7 +238,8 @@ impl Subcommand {
 fn unknown_subcommand(name: &str) -> String {
     format!(
         "no target named {name:?}: carried subcommands: ghdl, ghdl-build, nvc, nvc-build, \
-         iverilog, iverilog-build, verilator, verilator-build, yosys, vivado, vivado-build"
+         iverilog, iverilog-build, verilator, verilator-build, yosys, vivado, vivado-build, \
+         quartus, quartus-build"
     )
 }
 
@@ -251,6 +291,8 @@ fn parse(argv: &[String]) -> Result<Cli, CliError> {
         "yosys" => Subcommand::Yosys,
         "vivado-build" => Subcommand::VivadoBuild,
         "vivado" => Subcommand::VivadoSim,
+        "quartus-build" => Subcommand::QuartusBuild,
+        "quartus" => Subcommand::QuartusSim,
         other => return Err(CliError(unknown_subcommand(other))),
     };
 
@@ -274,14 +316,15 @@ fn parse(argv: &[String]) -> Result<Cli, CliError> {
                     .ok_or_else(|| CliError("--top needs a unit name".to_string()))?;
                 tops.push(value.clone());
             }
-            // The part is vivado-build's flag, and that face's alone: on
+            // The part is the build faces' flag, and theirs alone: on
             // any other face it is a loud usage error, never a dropped
-            // argument -- the sim face consumes no part, and the other
+            // argument -- the sim faces consume no part, and the other
             // tools do not speak one.
             "--part" => {
-                if subcommand != Subcommand::VivadoBuild {
+                if subcommand != Subcommand::VivadoBuild && subcommand != Subcommand::QuartusBuild {
                     return Err(CliError(
-                        "--part is the vivado-build face's flag: this face consumes no part"
+                        "--part is the build faces' flag (vivado-build, quartus-build): this \
+                         face consumes no part"
                             .to_string(),
                     ));
                 }
@@ -366,15 +409,20 @@ fn drive_request(request: Request) -> ExitCode {
         return ExitCode::from(2);
     }
     // The part gate, BEFORE any drive: the vivado build face names the
-    // FPGA part its synthesis targets, and the probed alternative -- a
+    // FPGA part its synthesis targets (the probed alternative -- a
     // part-less `synth_design` failing inside the tool after ~4s of
-    // synthesis -- is exactly what the exit-2 gate prevents. Every other
-    // face never sees the flag (the argv parser rejects it), so this
-    // gate fires only where the part is required.
-    if request.subcommand == Subcommand::VivadoBuild && request.part.is_none() {
+    // synthesis -- is what the exit-2 gate prevents); the quartus build
+    // face names the DEVICE its map targets (the documented
+    // alternative: an unmapped fabric refusal inside quartus_map,
+    // UNPROBED). Every other face never sees the flag (the argv parser
+    // rejects it), so this gate fires only where the part is required.
+    if (request.subcommand == Subcommand::VivadoBuild
+        || request.subcommand == Subcommand::QuartusBuild)
+        && request.part.is_none()
+    {
         eprintln!(
             "orbit-drives: error: no part to synthesize: pass --part <part> (e.g. \
-             --part xc7z010clg400-1): the vivado-build face names the FPGA part before \
+             --part xc7z010clg400-1): the build faces name the FPGA part before \
              any drive"
         );
         return ExitCode::from(2);
@@ -434,6 +482,16 @@ fn drive_request(request: Request) -> ExitCode {
         })
         .map_err(|e| e.exit_code()),
         Subcommand::VivadoBuild | Subcommand::VivadoSim => vivado::drive(
+            &blueprint::Drive {
+                blueprint,
+                tops,
+                extra: request.extra,
+                part: request.part,
+            },
+            request.subcommand.mode(),
+        )
+        .map_err(|e| e.exit_code()),
+        Subcommand::QuartusBuild | Subcommand::QuartusSim => quartus::drive(
             &blueprint::Drive {
                 blueprint,
                 tops,
@@ -553,7 +611,8 @@ mod tests {
             err.0.contains("ghdl-build")
                 && err.0.contains("nvc-build")
                 && err.0.contains("iverilog-build")
-                && err.0.contains("verilator-build"),
+                && err.0.contains("verilator-build")
+                && err.0.contains("quartus-build"),
             "the error should list the carried subcommands: {}",
             err.0
         );
@@ -624,22 +683,44 @@ mod tests {
     }
 
     #[test]
-    fn the_part_flag_is_vivado_builds_alone() {
+    fn the_part_flag_is_the_build_faces_alone() {
         // Every other face rejects --part at the parse: the other tools
         // do not speak one.
         assert!(parse(&argv(&["ghdl", "--top", "tb", "--part", "p"])).is_err());
         assert!(parse(&argv(&["yosys", "--top", "top", "--part", "p"])).is_err());
         let err = parse(&argv(&["verilator", "--top", "tb", "--part"])).unwrap_err();
         assert!(
-            err.0.contains("vivado-build face's flag"),
-            "the rejection should name the flag's face: {}",
+            err.0.contains("build faces' flag"),
+            "the rejection should name the flag's faces: {}",
             err.0
         );
     }
 
     #[test]
+    fn quartus_build_is_its_own_subcommand_driving_the_build_face() {
+        let request =
+            run_of(parse(&argv(&["quartus-build", "--top", "top", "--part", "p"])).unwrap());
+        assert_eq!(request.subcommand, Subcommand::QuartusBuild);
+        assert_eq!(request.subcommand.mode(), blueprint::Mode::Build);
+        assert_eq!(request.part, Some("p".to_string()));
+    }
+
+    #[test]
+    fn quartus_drives_the_sim_face_and_carries_no_part() {
+        // The sim face consumes no part: the flag is not merely ignored,
+        // it is rejected loudly -- a dropped argument would be a
+        // silent degradation.
+        assert!(parse(&argv(&["quartus", "--top", "tb", "--part", "p"])).is_err());
+        let request = run_of(parse(&argv(&["quartus", "--top", "tb"])).unwrap());
+        assert_eq!(request.subcommand, Subcommand::QuartusSim);
+        assert_eq!(request.subcommand.mode(), blueprint::Mode::Sim);
+        assert_eq!(request.part, None);
+    }
+
+    #[test]
     fn a_dangling_part_is_a_loud_usage_error() {
         assert!(parse(&argv(&["vivado-build", "--part"])).is_err());
+        assert!(parse(&argv(&["quartus-build", "--part"])).is_err());
     }
 
     #[test]

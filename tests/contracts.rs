@@ -153,8 +153,9 @@ fn unknown_tool_is_an_error() {
 
 #[test]
 fn vocabulary_registry() {
-    // The registry carries exactly the probed tools, and ghdl's vocabulary
-    // is the three probed faces, in probed order.
+    // The registry carries exactly the carried tools -- seven probed,
+    // quartus documented-only -- and ghdl's vocabulary is the three
+    // probed faces, in probed order.
     assert_eq!(
         contracts::tools(),
         &[
@@ -163,7 +164,8 @@ fn vocabulary_registry() {
             Tool::Iverilog,
             Tool::Verilator,
             Tool::Yosys,
-            Tool::Vivado
+            Tool::Vivado,
+            Tool::Quartus
         ]
     );
     assert_eq!(Tool::Ghdl.name(), "ghdl");
@@ -879,4 +881,79 @@ fn viv_vocabulary_is_the_three_probed_markers() {
     // probed order.
     assert_eq!(Tool::Vivado.name(), "vivado");
     assert_eq!(Tool::Vivado.vocabulary(), &["Fatal:", "Error:", "Failure:"]);
+}
+
+// ===== the quartus vocabulary, DOCUMENTED-ONLY (no quartus on the
+// probing box): the pins below hold the judge MECHANICS on the
+// hypothesized ModelSim-family shapes, never probed tool faces =====
+
+// The hypothesized Questa run faces: the ModelSim-family rendering puts
+// the mixed-case marker at LINE START (`Failure: the design is wrong`).
+// UNPROBED -- the first quartus box rewrites these fixtures from live
+// logs.
+const QRT_FAILURE_LOG_HYPOTHESIS: &str = "\
+# vsim work.tb_fail
+run -all
+Failure: the design is wrong
+ quit
+";
+
+// The hypothesized negative pins, riding vivado's probed rule: a case
+// drift (`FATAL:`) at line start and a marker mid-line never judge.
+const QRT_DRIFT_LOG_HYPOTHESIS: &str = "\
+FATAL: the design is wrong
+the sim says: Error: retrying
+  indented Failure: line
+";
+
+// The hypothesized clean run: the banner, the report note, the quit --
+// no marker anywhere.
+const QRT_CLEAN_LOG_HYPOTHESIS: &str = "\
+# vsim work.tb_clean
+run -all
+sim done
+ quit
+";
+
+#[test]
+fn qrt_hypothesized_line_start_faces_judge_fail() {
+    // The judge mechanics on the hypothesized shapes: a line LEADING
+    // with any of the three hypothesized markers convicts -- the same
+    // anchor vivado's probed pins hold, UNPROBED for quartus itself.
+    for face in ["Fatal:", "Error:", "Failure:"] {
+        let failing = format!("Noise first\n{face} the design is wrong\n");
+        assert!(
+            !contracts::judge(&Tool::Quartus, &failing),
+            "the line-start {face:?} hypothesis did not judge its log"
+        );
+    }
+    assert!(!contracts::judge(
+        &Tool::Quartus,
+        QRT_FAILURE_LOG_HYPOTHESIS
+    ));
+}
+
+#[test]
+fn qrt_hypothesized_drifts_never_judge() {
+    // The negative pins ride vivado's probed rule, hypothesized for
+    // quartus: a case drift at line start, a marker mid-line, an
+    // indented marker -- none judge. And the hypothesized clean run
+    // judges PASS.
+    assert!(contracts::judge(&Tool::Quartus, QRT_DRIFT_LOG_HYPOTHESIS));
+    assert!(contracts::judge(&Tool::Quartus, QRT_CLEAN_LOG_HYPOTHESIS));
+}
+
+#[test]
+fn qrt_vocabulary_is_the_hypothesized_markersim_markers() {
+    // quartus's vocabulary is the three hypothesized ModelSim-family
+    // markers -- DOCUMENTED-ONLY, the same spellings as vivado's probed
+    // set, line-anchored like vivado's. The doc comment stamps every
+    // sentence UNPROBED; the first quartus box rewrites the vocabulary
+    // from live logs.
+    assert_eq!(Tool::Quartus.name(), "quartus");
+    assert_eq!(
+        Tool::Quartus.vocabulary(),
+        &["Fatal:", "Error:", "Failure:"]
+    );
+    assert!(Tool::Quartus.line_anchored());
 }

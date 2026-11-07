@@ -154,10 +154,10 @@ pub struct Drive {
     /// the user's extras with the `--` separator stripped, and the argv
     /// parser passes through every token the drive does not own.
     pub extra: Vec<String>,
-    /// The FPGA part the vivado build face synthesizes for (`--part`,
-    /// e.g. `xc7z010clg400-1`). Only the vivado build face reads it --
-    /// the argv parser rejects the flag on every other face, so every
-    /// other drive sees `None` here.
+    /// The FPGA part the vivado and quartus build faces synthesize for
+    /// (`--part`, e.g. `xc7z010clg400-1`). Only those two build faces
+    /// read it -- the argv parser rejects the flag on every other face,
+    /// so every other drive sees `None` here.
     pub part: Option<String>,
 }
 
@@ -248,17 +248,20 @@ pub fn verilog_only(entries: &[Entry]) -> Result<Vec<PathBuf>, crate::iverilog::
 }
 
 /// The VHDL and Verilog files of the blueprint, in blueprint order: the
-/// pair the vivado drives compile -- VHDL entries through xvhdl, `VLOG`
-/// and `SYSV` entries through xvlog.
+/// pair the vivado and quartus build faces compile -- VHDL entries to
+/// their VHDL compilers (xvhdl; the .qsf's `VHDL_FILE` lines), `VLOG`
+/// and `SYSV` entries to their Verilog compilers (xvlog; the .qsf's
+/// `VERILOG_FILE` lines).
 ///
-/// Vivado is the one carried tool that speaks both languages, so this is
-/// the only filter that carries two fileset families. Every OTHER entry
-/// -- a custom fileset -- is rejected loudly: a silent skip would leave
-/// files the user believes were compiled.
+/// Two carried tools speak both languages, so this is the filter shape
+/// that carries two fileset families. Every OTHER entry -- a custom
+/// fileset -- is rejected loudly: a silent skip would leave files the
+/// user believes were compiled.
 ///
 /// The error type is [`crate::vivado::NotCarried`] -- its message names
 /// the three carried filesets, not one face, because both vivado faces
-/// carry it.
+/// carry it. The quartus build face takes the same pair through
+/// [`quartus_files`], whose error message names quartus's faces.
 pub fn vivado_files(
     entries: &[Entry],
 ) -> Result<(Vec<PathBuf>, Vec<PathBuf>), crate::vivado::NotCarried> {
@@ -282,6 +285,46 @@ pub fn vivado_files(
         Ok((vhdl, verilog))
     } else {
         Err(crate::vivado::NotCarried { entries: foreign })
+    }
+}
+
+/// The VHDL and Verilog files of the blueprint, in blueprint order: the
+/// pair the quartus-build face writes into the generated `.qsf` --
+/// VHDL entries as `VHDL_FILE` lines, `VLOG` and `SYSV` entries as
+/// `VERILOG_FILE` lines. Every OTHER entry -- a custom fileset -- is
+/// rejected loudly, like on every other face. (The quartus SIM face
+/// carries the VHDL fileset only -- the documented vcom recipe -- and
+/// rides [`vhdl_only`]'s shape through [`crate::quartus::NotCarried`],
+/// whose message names the quartus face.)
+///
+/// The error type is [`crate::quartus::NotCarried`], labeled with the
+/// face that refused the fileset.
+pub fn quartus_files(
+    entries: &[Entry],
+) -> Result<(Vec<PathBuf>, Vec<PathBuf>), crate::quartus::NotCarried> {
+    let foreign: Vec<Entry> = entries
+        .iter()
+        .filter(|entry| {
+            entry.fileset != "VHDL" && entry.fileset != "VLOG" && entry.fileset != "SYSV"
+        })
+        .cloned()
+        .collect();
+    if foreign.is_empty() {
+        let mut vhdl = Vec::new();
+        let mut verilog = Vec::new();
+        for entry in entries {
+            if entry.fileset == "VHDL" {
+                vhdl.push(entry.path.clone());
+            } else {
+                verilog.push(entry.path.clone());
+            }
+        }
+        Ok((vhdl, verilog))
+    } else {
+        Err(crate::quartus::NotCarried {
+            face: "build face",
+            entries: foreign,
+        })
     }
 }
 
@@ -374,5 +417,31 @@ mod tests {
                 .unwrap_err();
         assert_eq!(err.entries.len(), 1);
         assert_eq!(err.entries[0].fileset, "MYSET");
+    }
+
+    #[test]
+    fn the_quartus_build_face_carries_both_languages_and_names_the_rest() {
+        // quartus_map speaks both languages through the generated .qsf:
+        // the same two-family filter shape as vivado's, each file split
+        // to its own assignment line.
+        let entries = parse_blueprint(
+            "VLOG\twork\t./b.v\nVHDL\twork\t./a.vhd\nSYSV\twork\t./c.sv\nVHDL\twork\t./d.vhd\n",
+        )
+        .unwrap();
+        let (vhdl, verilog) = quartus_files(&entries).unwrap();
+        assert_eq!(
+            vhdl,
+            vec![PathBuf::from("./a.vhd"), PathBuf::from("./d.vhd")]
+        );
+        assert_eq!(
+            verilog,
+            vec![PathBuf::from("./b.v"), PathBuf::from("./c.sv")]
+        );
+        let err =
+            quartus_files(&parse_blueprint("VHDL\twork\t./a.vhd\nMYSET\twork\t./x.v\n").unwrap())
+                .unwrap_err();
+        assert_eq!(err.entries.len(), 1);
+        assert_eq!(err.entries[0].fileset, "MYSET");
+        assert_eq!(err.face, "build face");
     }
 }

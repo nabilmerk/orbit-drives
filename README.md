@@ -100,6 +100,20 @@ Subcommands (one per orbit target entry):
   and one xsim run per snapshot, every run log gated on vivado's probed
   LINE-START failure vocabulary AND the exit. xsim exits 0 on BOTH probed
   runtime failures, so the judge is the load-bearing gate here.
+- `quartus-build` -- the quartus build face, DOCUMENTED-ONLY: per top a
+  GENERATED `.qsf` (DEVICE from `--part`, TOP_LEVEL_ENTITY, one
+  `VHDL_FILE` / `VERILOG_FILE` line per blueprint file) and one batch
+  `quartus_map --read_settings_files=off --write_settings_files=off
+  <top> -c <top>`, exit honest. Nothing on this face is probed -- quartus
+  is not installed on the probing box; every hypothesis carries its
+  first-contact rule in the honest limits.
+- `quartus` -- the quartus sim face, DOCUMENTED-ONLY: the bundled Questa
+  -- `vlib work`, `vmap work work`, `vcom -2008 -work work` per VHDL file
+  through the deferral loop, then per top one
+  `vsim -c -do "run -all; quit" -L work work.<top>`, every run log gated
+  on the hypothesized ModelSim-family LINE-START vocabulary
+  (`Fatal:` / `Error:` / `Failure:`, UNPROBED) AND the exit (vsim honest,
+  UNPROBED). Neither witness is trusted alone.
 
 Options:
 
@@ -107,19 +121,21 @@ Options:
 - `--top <name>` -- a top unit to elaborate (and run: `ghdl`); repeatable.
   With no `--top`, the drive runs `$ORBIT_TB_NAME` (orbit exports it; empty
   in all-mode counts as absent). Exit 2 when neither names a top.
-- `--part <part>` -- the FPGA part `vivado-build` synthesizes for (e.g.
-  `xc7z010clg400-1`). REQUIRED on `vivado-build` -- the gate fires before
-  any drive, exit 2 naming the flag (the probed alternative is a ~4s
-  synth-then-fail inside the tool) -- and REJECTED on every other face
-  (loud exit-2: the sim face consumes no part, and the other tools do not
-  speak one).
+- `--part <part>` -- the FPGA part the build faces synthesize for (e.g.
+  `xc7z010clg400-1`). REQUIRED on `vivado-build` (the probed
+  alternative: a ~4s synth-then-fail inside the tool) and on
+  `quartus-build` (the documented alternative: an unmapped-fabric
+  refusal inside `quartus_map`, UNPROBED) -- the gate fires before any
+  drive, exit 2 naming the flag -- and REJECTED on every other face
+  (loud exit-2: the sim faces consume no part, and the other tools do
+  not speak one).
 - anything else -- a tool extra, appended verbatim to the drive's LAST
-  tool argv: each `ghdl -r` / `nvc -r` / `vvp` / `xsim` on the sim faces,
-  each `ghdl -e` / `nvc -e` / the `iverilog` compile / the `yosys -p`
-  synth / `vivado -mode batch` on the build faces (there is no run to
-  carry them, and a dropped argument would be a silent degradation; an
-  option the elaboration does not speak is the tool's own loud rejection,
-  surfaced as an exit-1 failure).
+  tool argv: each `ghdl -r` / `nvc -r` / `vvp` / `xsim` / `vsim` on the
+  sim faces, each `ghdl -e` / `nvc -e` / the `iverilog` compile / the
+  `yosys -p` synth / `vivado -mode batch` / `quartus_map` on the build
+  faces (there is no run to carry them, and a dropped argument would be
+  a silent degradation; an option the elaboration does not speak is the
+  tool's own loud rejection, surfaced as an exit-1 failure).
 
 Exits:
 
@@ -390,11 +406,78 @@ spawnability probe.
   the only drive in this crate where the exit cannot convict a probed
   failure. The exit stays the crash-door witness: a missing snapshot
   exits 1 with an uppercase face the vocabulary does not carry.
-- **The vocabulary is line-anchored, the only one in this crate.** The
-  faces are `Fatal:` / `Error:` / `Failure:` at LINE START, case-exact:
-  a case drift (`FATAL:`) and a marker mid-line (a testbench's own
-  report note, an echoed source line) never judge. `Warning:` and
-  `Note:` lines never judge.
+- **The vocabulary is line-anchored, the only PROBED one in this
+  crate.** The faces are `Fatal:` / `Error:` / `Failure:` at LINE START,
+  case-exact: a case drift (`FATAL:`) and a marker mid-line (a
+  testbench's own report note, an echoed source line) never judge.
+  `Warning:` and `Note:` lines never judge.
+
+## The quartus drives
+
+Two target entries (`quartus`, `quartus-build`) share one drive -- the
+DOCUMENTED-ONLY drive of this crate: quartus is not installed on the
+probing box, so nothing here is probed, every CLI face is the documented
+hypothesis, and every hypothesis carries its first-contact rule in the
+honest limits. On the first quartus box, the owner runs the gated shape
+tests (`cargo test -- --ignored` with `QUARTUS_BIN` set) and rewrites
+the vocabulary and these rules from the live logs.
+
+### The resolution
+
+The binaries resolve from `QUARTUS_BIN` (the quartus_map path), the
+bundled Questa deriving as the `questa_fse/bin` SIBLING of the quartus
+install (`<install>/quartus/bin/quartus_map` derives
+`<install>/quartus/questa_fse/bin/{vlib,vmap,vcom,vsim}` -- the
+documented derive, UNPROBED); a bare PATH name falls back to the PATH
+lookup for the whole family.
+
+### The build face (`quartus-build`)
+
+- **`--part` is required BEFORE any drive** (exit 2 at the CLI naming
+  the flag): the DEVICE assignment names the fabric the map targets.
+  The sim face consumes no part -- the flag on any other face is a loud
+  parse error, never a dropped argument.
+- **The project settings are GENERATED per top**, written to
+  `<top>.qsf`: `set_global_assignment -name DEVICE <part>`,
+  `set_global_assignment -name TOP_LEVEL_ENTITY <top>`, and one
+  `VHDL_FILE` / `VERILOG_FILE` line per blueprint file (both languages
+  ride the build face; a custom fileset is the loud not-carried face).
+  HYPOTHESIS: that DEVICE + TOP_LEVEL_ENTITY + the file list suffice for
+  a minimal `.qsf` is the first-contact question.
+- **The batch argv is the documented one**:
+  `quartus_map --read_settings_files=off --write_settings_files=off
+  <top> -c <top>` (project = top, revision = top). HYPOTHESIS: the
+  read/write-settings flags' exact semantics are unprobed.
+- **The exit is hypothesized honest** (nonzero on failure, UNPROBED):
+  the build face gates on the exit and never judges the log.
+
+### The sim face (`quartus`)
+
+- **The VHDL fileset only.** The documented recipe is vcom's alone:
+  `VLOG` / `SYSV` entries are the loud not-carried face here (exit 2),
+  though they ride the build face's `VERILOG_FILE` lines.
+- **The library opens documented**: `vlib work`, then `vmap work work`
+  (the ModelSim workflow's opening pair, UNPROBED); the drive wipes
+  `work/` and `modelsim.ini` before every sim drive -- the
+  correctness-before-incrementality stance, DOCUMENTED-ONLY.
+- **vcom compiles in blueprint order through the deferral loop** (the
+  ghdl-precedent machinery, borrowed a fourth time): the
+  order-sensitivity hypothesis of the stateful ModelSim library, so a
+  failing file defers to a retry after the others. The standard is
+  pinned (`vcom -2008 -work work`, vcom's spelling of the crate-wide
+  VHDL-2008 pin; `-93` / `-2002` are the other spellings and cannot be
+  selected from the argv yet).
+- **vsim runs each top once**:
+  `vsim -c -do "run -all; quit" -L work work.<top>`, the `-L work` pin
+  before the top -- the documented order, UNPROBED. The extras ride
+  this argv verbatim.
+- **The gate is double-keyed on hypotheses.** The exit honesty (vsim
+  honest) and the vocabulary (line-start `Fatal:` / `Error:` /
+  `Failure:`, the ModelSim-family rendering riding vivado's probed
+  anchor) are BOTH unprobed -- so neither witness is trusted alone and
+  either convicts, the same as everywhere in this crate. The
+  vocabulary's negative pins are hypothesized from vivado's probed
+  ones: a case drift (`FATAL:`) and a marker mid-line never judge.
 
 ## The probed facts
 
@@ -538,12 +621,55 @@ own scratch.
   the `VHDL` fileset only; the Verilog drives (`iverilog`, `verilator`,
   `yosys`) carry `VLOG` and `SYSV` (their native filesets) and reject
   `VHDL` and custom filesets with a loud exit-2 ("not yet carried"),
-  never a silent skip. The vivado drives carry all three (`VHDL` +
-  `VLOG` + `SYSV`) and reject only custom filesets -- vivado is the one
-  carried tool that speaks both languages.
-- **Six tool names, six vocabularies: ghdl, nvc, iverilog, verilator,
-  yosys, vivado.** Any other tool name is a loud error at the CLI, never
-  a guess.
+  never a silent skip. The vivado drives and the quartus-build face
+  carry all three (`VHDL` + `VLOG` + `SYSV`) and reject only custom
+  filesets -- vivado is the one PROBED tool that speaks both languages,
+  quartus-build the documented-only second; the quartus sim face carries
+  the `VHDL` fileset only (the documented recipe is vcom's alone).
+- **Seven tool names, seven vocabularies: ghdl, nvc, iverilog,
+  verilator, yosys, vivado, quartus.** Any other tool name is a loud
+  error at the CLI, never a guess. Six vocabularies are probed; the
+  seventh (quartus) is the documented-only ModelSim-family hypothesis
+  (below).
+- **quartus is DOCUMENTED-ONLY -- every sentence about it is a
+  hypothesis carrying its first-contact rule.** quartus is not
+  installed on the probing box, so none of its faces are probed. The
+  hypotheses and their first-contact rules, owner's call on the first
+  quartus box (run `cargo test -- --ignored` with `QUARTUS_BIN` set --
+  the gated shape tests are the harness):
+  - **DEVICE-only sufficiency of the generated `.qsf`** (DEVICE +
+    TOP_LEVEL_ENTITY + the file lines): if `quartus_map` refuses the
+    minimal file, extend `qsf_script` from the tool's own complaint --
+    never invent assignments speculatively.
+  - **the Questa sibling derive** (`questa_fse/bin` beside the quartus
+    install): if the first install names it differently (a versioned
+    or differently-named directory), resolve from the actual layout and
+    update `questa_bin`.
+  - **vsim's exit honesty** (nonzero on a failing sim): probe with a
+    severity-failure testbench BEFORE trusting the exit witness alone;
+    if vsim lies the way xsim lies, the vocabulary becomes the
+    load-bearing gate and the README records it.
+  - **the vocabulary itself** (line-start `Fatal:` / `Error:` /
+    `Failure:`, ModelSim-family): probe the real failing faces (severity
+    failure, severity error, an elaboration refusal) and rewrite
+    `QUARTUS_VOCABULARY` from the live logs -- spellings, anchor, and
+    negative pins alike.
+  - **the vcom default standard** (`-2008` accepted): probe `vcom
+    -2008` on a real file; if the bundled Questa rejects the flag
+    spelling, the pin moves to the accepted spelling and the honest
+    limit is rewritten.
+  - **the `-L`-before-top order on the vsim argv** (`vsim -c -do "run
+    -all; quit" -L work work.<top>`): probe the documented argv; if
+    vsim wants the `-L` pins after the design (or extra `-L` pins per
+    dependency library), the argv shape moves and the README records
+    it.
+  - **the read/write-settings flags** (`--read_settings_files=off
+    --write_settings_files=off`): probe whether the generated `.qsf` is
+    actually read under them; if not, the invocation moves to the
+    variant that reads it.
+  - **the build face's state** (quartus_map's compilation database): a
+    stale database could make a re-drive incremental; the first probed
+    re-drive decides whether the wipe list grows.
 - **The library column is carried, not mapped.** Every file analyzes
   into the tool's `work` library (ghdl's `work-obj08.cf` clock, nvc's
   `work/` directory), compiles into iverilog's one snapshot, or lints
@@ -601,12 +727,15 @@ own scratch.
   relayed.
 - **The run log is captured, then relayed**, not streamed; a long
   simulation's output appears when the run ends.
-- **The tools resolve on PATH, vivado from its env hook.** The orbit
-  target contract carries no binary-path field: every drive but vivado
-  pins the bare name; vivado resolves from `$VIVADO_BIN` (the install
-  path) with the bare name on PATH as the fallback, and its stage
-  binaries ride beside the resolved path (or on PATH). The vivado recipe
-  env rides the drive's own spawn scoping -- see the launch recipe.
+- **The tools resolve on PATH, vivado and quartus from their env
+  hooks.** The orbit target contract carries no binary-path field: every
+  drive but those two pins the bare name; vivado resolves from
+  `$VIVADO_BIN` (the install path) with the bare name on PATH as the
+  fallback, and its stage binaries ride beside the resolved path (or on
+  PATH); quartus resolves from `$QUARTUS_BIN` the same way, its bundled
+  Questa deriving as the `questa_fse/bin` sibling (DOCUMENTED-ONLY).
+  The vivado recipe env rides the drive's own spawn scoping -- see the
+  launch recipe.
 - **Blueprint paths with spaces are a v1 limit on the script faces.**
   yosys's `-p` script and vivado's generated synth script carry the file
   paths verbatim, split on whitespace by the tool's own parser: a path
@@ -631,7 +760,11 @@ cargo test -- --ignored   # + the real-spawn tests: the real binary, real
                           # deferral loop, judged severity failures and
                           # $fatal/$error calls, twice in one output
                           # directory, the build faces, and the vivado
-                          # lying-exit gate
+                          # lying-exit gate. The quartus and cocotb
+                          # shapes gate on their toolchains: quartus
+                          # needs QUARTUS_BIN (the first-contact
+                          # harness for the documented-only faces),
+                          # cocotb needs cocotb + ghdl on PATH
 ```
 
 The contract suite (`tests/contracts.rs`) ports the aquila contract tests

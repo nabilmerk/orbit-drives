@@ -937,12 +937,15 @@ ERROR: Please check the snapshot name which is created during 'xelab',the curren
     }
 
     #[test]
-    fn vivado_is_the_one_line_anchored_tool() {
-        // The registry's one line-anchored vocabulary: vivado's. Every
-        // other tool's faces ride the substring search.
+    fn vivado_and_quartus_are_the_line_anchored_tools() {
+        // The registry's line-anchored vocabularies: vivado's (the
+        // probed pins) and quartus's (the documented ModelSim-family
+        // hypothesis riding the same anchor). Every other tool's faces
+        // ride the substring search.
         assert!(Tool::Vivado.line_anchored());
+        assert!(Tool::Quartus.line_anchored());
         for tool in contracts::tools() {
-            if tool.name() != "vivado" {
+            if tool.name() != "vivado" && tool.name() != "quartus" {
                 assert!(
                     !tool.line_anchored(),
                     "{} should not be line-anchored",

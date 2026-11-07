@@ -25,6 +25,13 @@
 # from it and its own defaults; see the README's launch-recipe section).
 # The vivado sim face consumes no --part.
 #
+#   orbit build --target quartus-build -- --part xc7z010clg400-1 --top top
+#
+# The quartus targets need the install path on $QUARTUS_BIN (the Questa
+# binaries derive as the questa_fse/bin sibling; bare PATH names the
+# fallback). DOCUMENTED-ONLY: the faces are hypotheses, UNPROBED -- see
+# the README's honest limits. The quartus sim face consumes no --part.
+#
 # No --top is needed for the sim faces through `orbit test`: the drive
 # runs the testbench orbit exports as $ORBIT_TB_NAME (through `orbit
 # build`, pass -- --top <name>). Everything after orbit's `--` rides the
@@ -86,3 +93,20 @@ command = ["orbit-drives", "vivado-build"]
 name = "vivado"
 description = "VHDL and Verilog/SV testbenches through Vivado xsim: the same both-language compile, then xelab per top (-L work work.<top> -s <top>) and one xsim -R per snapshot, every run log gated on vivado's probed LINE-START failure vocabulary (Failure:/Error:/Fatal: at line start; case drift and mid-line markers never judge) -- xsim exits 0 on BOTH probed runtime failures (a severity failure AND a severity error), so the judge is the load-bearing gate; the sim face consumes no --part"
 command = ["orbit-drives", "vivado"]
+
+# The quartus targets are DOCUMENTED-ONLY: quartus is not installed on
+# the probing box, every CLI face below is the documented hypothesis
+# (UNPROBED), and every hypothesis carries its first-contact rule in the
+# README's honest limits. The binaries resolve from $QUARTUS_BIN (the
+# quartus_map path), the bundled Questa (vlib/vmap/vcom/vsim) deriving as
+# the questa_fse/bin sibling, bare PATH names the fallback.
+
+[[target]]
+name = "quartus-build"
+description = "VHDL and Verilog/SV synthesis through Quartus (DOCUMENTED-ONLY, UNPROBED): per top a GENERATED .qsf (DEVICE from --part, TOP_LEVEL_ENTITY, one VHDL_FILE / VERILOG_FILE line per blueprint file) and one batch `quartus_map --read_settings_files=off --write_settings_files=off <top> -c <top>`, exit honest -- the exit honesty is the documented hypothesis. Requires --part BEFORE any drive (exit 2 at the CLI)"
+command = ["orbit-drives", "quartus-build"]
+
+[[target]]
+name = "quartus"
+description = "VHDL testbenches through Quartus's bundled Questa (DOCUMENTED-ONLY, UNPROBED): vlib work, vmap work work, vcom -2008 -work work per VHDL file through the deferral loop, then per top `vsim -c -do \"run -all; quit\" -L work work.<top>`, every run log gated on the hypothesized ModelSim-family LINE-START vocabulary (Fatal:/Error:/Failure:, UNPROBED) AND the exit (vsim honest, UNPROBED) -- neither witness is trusted alone. Carries the VHDL fileset only (the documented recipe is vcom's); the sim face consumes no --part"
+command = ["orbit-drives", "quartus"]
