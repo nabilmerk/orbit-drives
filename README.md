@@ -73,9 +73,11 @@ Subcommands (one per orbit target entry):
   the second witness.
 - `verilator-build` -- the verilator build face: the lint and the
   per-top model builds only, exit honest. No simulation, nothing judged:
-  verilator's lint exits are honest (exit 1 on a lint error, on an
-  unknown `--top-module`, and on an enabled warning, probed live), and
-  every `--top` is validated against the source at lint time.
+  verilator's lint exits are honest (exit 1 on a lint error and on an
+  enabled warning, probed live), and every `--top` is validated by its
+  own per-top build -- the lint honors only the LAST `--top-module`
+  (probed: an unknown non-last top lints clean, exit 0), and an unknown
+  top fails its build loudly.
 
 Options:
 
@@ -198,14 +200,15 @@ verilator's probed process. The differences the probes wrote down:
   the vocabulary's bare `%Error` face subsumes the coded form either way.
 - **One lint, per-top builds, per-top runs.** The lint runs once over all
   files with every requested `--top` a `--top-module` (repeated flags
-  probed legal; each name validated by verilator against the source at
-  lint time, `%Error: Specified --top-module 'nosuch' was not found in
-  design.`, exit 1). Each top then gets its own model build
-  (`verilator --binary --build --timing --top-module <top>`, landing
-  `obj_dir/V<top>`) and -- on the sim face -- its own judged run: each
-  testbench is its own simulation, as on the VHDL faces. The model
-  binaries of different tops coexist in the one `obj_dir` (probed side
-  by side).
+  probed legal; but verilator honors only the LAST one -- probed: an
+  unknown non-last top lints clean, exit 0). Every top is validated by
+  its own per-top build on both faces: an unknown top answers
+  `%Error: Specified --top-module 'nosuch' was not found in design.`,
+  exit 1, at its build (`verilator --binary --build --timing
+  --top-module <top>`, landing `obj_dir/V<top>`) -- and -- on the sim
+  face -- each top then gets its own judged run: each testbench is its
+  own simulation, as on the VHDL faces. The model binaries of different
+  tops coexist in the one `obj_dir` (probed side by side).
 - **The language is verilator's default** -- no `--language` pin in v1;
   the probed fixtures are plain enough to sit inside it. The pinned flags
   are the probed ones: `--lint-only --timing` on the lint face,
@@ -299,7 +302,7 @@ embeds a face shape (`ERROR: retrying`) convicts the run -- keep
 |------|-----|------|
 | `%Error: broken.v:2:3: syntax error, unexpected input, expecting ';'` (+ caret block, then `%Error: Exiting due to 1 error(s)`) | `verilator --lint-only broken.v` (same through the drive, which pins `--timing`) | the lint-error face, exit 1 -- the lint gates on the exit and is never judged, the face is recorded |
 | `%Error-NEEDTIMINGOPT: tb.sv:7:5: Use --timing or --no-timing to specify how delays should be handled` | `verilator --lint-only tb.sv` (no `--timing`) on a delay-carrying file | the coded lint face, exit 1 -- why the drive pins `--timing` on every argv; the bare `%Error` vocabulary face subsumes the coded form |
-| `%Error: Specified --top-module 'nosuch' was not found in design.` | `verilator --lint-only --timing --top-module nosuch tb.sv ...` | the lint-time refusal of an unknown top, exit 1 -- top names validated at lint time, so the build face carries the check for free |
+| `%Error: Specified --top-module 'nosuch' was not found in design.` | `verilator --lint-only --timing --top-module nosuch tb.sv ...` | the refusal of an unknown top, exit 1 -- on the lint it fires only when the unknown name is the LAST `--top-module` (the honored one; a non-last one lints clean, exit 0), and every top is validated by its own per-top build on both faces |
 | `%Warning-WIDTHTRUNC: ...` still exit 1 | `verilator --lint-only --timing -Wall widthy.sv` (and even under `-Wwarn-WIDTHTRUNC`) | an *enabled warning* fails the lint -- there is no exit-0 warning face in lint land; a warning face never needs judging |
 | `%Fatal: tb_fatal.sv:8: Assertion failed in tb_fatal: the design is wrong`, then `%Error: tb_fatal.sv:8: Verilog $stop`, then `Aborting...` (stdout) | `verilator --binary --build --timing --top-module tb_fatal ... && ./obj_dir/Vtb_fatal` (same through the drive) | a model `$fatal(1, "...")`: the faces land, the model dies by **SIGABRT** -- no exit code at all (shell: `Aborted`; the drive records -1) -- the exit convicts, the face is the second witness |
 | `%Error: tb_err.sv:8: Assertion failed in tb_err: check failed` (+ `%Error: ... Verilog $stop`, `Aborting...`) | `./obj_dir/Vtb_err` on a `$error("...")` call | a model `$error`: the same faces, the same SIGABRT -- unlike vvp's continue-and-exit-0 `$error`, the built model has no interactive continue |

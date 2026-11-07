@@ -60,10 +60,11 @@ SUBCOMMANDS:
     verilator-build
                  the lint and the per-top model builds only, exit
                  honest; no simulation and nothing judged -- the lint
-                 exits are honest (exit 1 on a lint error, an unknown
-                 --top-module, or an enabled warning, probed live), and
-                 verilator validates every --top-module name at lint
-                 time (the verilator build face)
+                 exits are honest (exit 1 on a lint error or an enabled
+                 warning, probed live) and every top is validated by
+                 its own per-top build: verilator honors only the LAST
+                 --top-module on the lint, so an unknown top fails its
+                 build with exit 1 (the verilator build face)
 
 SHARED OPTIONS:
     --blueprint <path>  the TSV blueprint (default: $ORBIT_BLUEPRINT)

@@ -199,9 +199,10 @@ fn plan_note(plan: Option<&str>) -> Option<String> {
 /// There is no deferral loop: verilator's lint and build are order-free
 /// (probed live on Verilator 5.032, 2026-11-07). The lint runs ONCE over
 /// all files with every requested top a `--top-module` (repeated flags
-/// probed legal, each name validated by verilator against the source at
-/// lint time, exit 1); each top then gets its own model build and -- on
-/// the sim face -- its own judged run.
+/// probed legal, but verilator honors only the LAST one -- probed: an
+/// unknown non-last top lints clean, exit 0); each top then gets its own
+/// model build, which validates it (an unknown top fails its build with
+/// exit 1), and -- on the sim face -- its own judged run.
 pub fn drive(request: &Drive, mode: Mode) -> Result<(), DriveError> {
     let label = mode.label();
     // verilator must be spawnable before anything else, so a missing
@@ -316,10 +317,12 @@ pub fn drive(request: &Drive, mode: Mode) -> Result<(), DriveError> {
 }
 
 /// The one lint: `verilator --lint-only --timing --top-module <top>...
-/// <files>`, every requested top a root. Verilator validates each top
-/// name against the source at lint time (`%Error: Specified --top-module
-/// 'nosuch' was not found in design.`, exit 1, probed), and its lint
-/// exits are honest, so both faces gate on the exit alone.
+/// <files>`, every requested top a root. Verilator honors only the LAST
+/// `--top-module` (probed: an unknown non-last top lints clean, exit 0);
+/// every top is validated by its own per-top build on both faces
+/// (`%Error: Specified --top-module 'nosuch' was not found in design.`,
+/// exit 1, probed at the build), and the lint and build exits are
+/// honest, so both faces gate on the exit alone.
 fn lint_once(files: &[std::path::PathBuf], tops: &[String]) -> Result<(), String> {
     let mut lint = Command::new(VERILATOR_BIN);
     lint.arg("--lint-only").arg(TIMING);

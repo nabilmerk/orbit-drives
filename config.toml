@@ -6,9 +6,14 @@
 # The `orbit-contracts` binary must be on PATH (`cargo install --path .`).
 # Run them through orbit:
 #
-#   orbit test --target ghdl -- -gWIDTH=8 --vcd=waves.vcd
+#   orbit test --target ghdl -- -gW=4 --vcd=waves.vcd
 #   orbit test --target nvc
-#   orbit test --target iverilog -- -vcd=waves.vcd
+#   orbit test --target iverilog
+#
+#   iverilog waves have no flag: vvp ignores a `-vcd=` extra (probed:
+#   exit 0, no file written), so the testbench itself must call
+#   `$dumpfile("waves.vcd")` and `$dumpvars(0, tb)` -- vvp then writes
+#   the waves into the drive's working directory.
 #   orbit build --target ghdl-build -- --top gate
 #   orbit build --target nvc-build -- --top gate
 #   orbit build --target verilator-build -- --top gate
@@ -52,10 +57,10 @@ command = ["orbit-contracts", "iverilog-build"]
 
 [[target]]
 name = "verilator"
-description = "Verilog/SV testbenches through verilator: one lint (--timing, every --top a --top-module validated at lint time), one model build per top (--binary --build into obj_dir), each model run gated on verilator's probed failure vocabulary and the model's exit -- every probed model failure dies by SIGABRT"
+description = "Verilog/SV testbenches through verilator: one lint (--timing; every --top a --top-module, of which verilator honors only the last), one model build per top (--binary --build into obj_dir; each build validates its top), each model run gated on verilator's probed failure vocabulary and the model's exit -- every probed model failure dies by SIGABRT"
 command = ["orbit-contracts", "verilator"]
 
 [[target]]
 name = "verilator-build"
-description = "Verilog/SV builds through verilator: the lint and the per-top model builds only, exit honest -- no simulation, nothing judged; the lint exits are honest (exit 1 on a lint error, an unknown --top-module, or an enabled warning)"
+description = "Verilog/SV builds through verilator: the lint and the per-top model builds only, exit honest -- no simulation, nothing judged; the lint honors only the last --top-module (an unknown non-last top lints clean), and the lint and build exits are honest (exit 1 on a lint error, an unknown top's own build, or an enabled warning)"
 command = ["orbit-contracts", "verilator-build"]
