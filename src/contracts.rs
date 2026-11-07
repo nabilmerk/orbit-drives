@@ -280,6 +280,39 @@ pub const VIVADO_VOCABULARY: &[&str] = &["Fatal:", "Error:", "Failure:"];
 /// vocabulary, and neither witness is trusted alone.
 pub const QUARTUS_VOCABULARY: &[&str] = &["Fatal:", "Error:", "Failure:"];
 
+/// cocotb's failure faces, probed live on cocotb 2.1.0 + ghdl 6.0.0
+/// (2026-11-07, `cocotb_tools.runner.get_runner("ghdl")` driving
+/// `ghdl -i` / `ghdl -m` / `ghdl -r`): cocotb aggregates -- the judged
+/// faces are COCOTB'S OWN, never the backing simulator's markers (a
+/// cocotb run log is a ghdl log, and ghdl's lowercase faces belong to the
+/// ghdl vocabulary, not this one). Two probed faces:
+///
+/// - `" FAIL "` -- the per-test row's status column in the regression
+///   summary table the runner always prints (indented, space-padded on
+///   both sides: `** tb.expects_the_wrong_count   FAIL           6.00
+///   ...`). A clean run's rows read ` PASS ` and its summary reads
+///   `** TESTS=1 PASS=1 FAIL=0 SKIP=0` -- `FAIL=0` shares no shape with
+///   ` FAIL ` (the space padding is load-bearing), so the summary's own
+///   failure counter never judges a clean run. The padding also makes
+///   the face false-positive-proof against bare `FAIL` prose: only the
+///   space-padded row column judges.
+/// - `Simulation terminated abnormally` -- the face
+///   `cocotb_tools.check_results.get_results` raises (and the drive's
+///   generated runner script relays) when the simulation died without
+///   writing a results file: a test module that fails to import, a
+///   module carrying no tests (`RuntimeError: No tests were discovered
+///   in any module: ...`), or a crashed sim -- probed live, exit 1 every
+///   time.
+///
+/// The runner's exit does NOT convict test findings (probed: `ghdl -r`
+/// exits 0 on a failing cocotb test -- the finding lands only in
+/// results.xml), so the drive's generated runner script reads
+/// results.xml itself and exits honest; the vocabulary is the second
+/// witness on the same log. Case-exact: the row column is uppercase
+/// `FAIL`, so a lowercase drift (` fail `) is not one of its faces and
+/// never judges a log.
+pub const COCOTB_VOCABULARY: &[&str] = &[" FAIL ", "Simulation terminated abnormally"];
+
 /// A tool carrying a probed failure vocabulary.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub enum Tool {
@@ -302,6 +335,11 @@ pub enum Tool {
     /// vocabulary is the ModelSim-family hypothesis, unprobed (no
     /// quartus on the probing box).
     Quartus,
+    /// The cocotb test runner (`cocotb_tools.runner`, over a backing
+    /// simulator -- ghdl here), probed live on cocotb 2.1.0. Test only:
+    /// there is no cocotb build face and no cocotb vocabulary face for
+    /// the simulator's own markers.
+    Cocotb,
 }
 
 /// The error for a tool name that resolves to nothing in the registry.
@@ -336,6 +374,7 @@ impl Tool {
             Tool::Yosys => "yosys",
             Tool::Vivado => "vivado",
             Tool::Quartus => "quartus",
+            Tool::Cocotb => "cocotb",
         }
     }
 
@@ -350,6 +389,7 @@ impl Tool {
             Tool::Yosys => YOSYS_VOCABULARY,
             Tool::Vivado => VIVADO_VOCABULARY,
             Tool::Quartus => QUARTUS_VOCABULARY,
+            Tool::Cocotb => COCOTB_VOCABULARY,
         }
     }
 
@@ -398,6 +438,7 @@ pub fn tools() -> &'static [Tool] {
         Tool::Yosys,
         Tool::Vivado,
         Tool::Quartus,
+        Tool::Cocotb,
     ]
 }
 

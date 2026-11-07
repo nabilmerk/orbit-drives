@@ -20,7 +20,7 @@ use std::env;
 use std::path::PathBuf;
 use std::process::ExitCode;
 
-use orbit_drives::{blueprint, ghdl, iverilog, nvc, quartus, verilator, vivado, yosys};
+use orbit_drives::{blueprint, cocotb, ghdl, iverilog, nvc, quartus, verilator, vivado, yosys};
 
 const USAGE: &str = "\
 orbit-drives: the probed failure vocabularies and the honest-exit targets for orbit
@@ -110,6 +110,19 @@ SUBCOMMANDS:
                  LINE-START vocabulary (Fatal:/Error:/Failure:, UNPROBED)
                  AND the exit (vsim honest, UNPROBED) -- neither witness
                  is trusted alone (the quartus sim face; UNPROBED)
+    cocotb       the cocotb test face, LIVE: cocotb's own python runner
+                 (`cocotb_tools.runner` over ghdl -- the runner IS the
+                 compile) driven by a GENERATED runner script per top,
+                 which reads results.xml and exits honest -- the
+                 load-bearing exit, probed: the runner exits 0 on a
+                 failed test (the finding lands only in results.xml).
+                 Every run log is gated on cocotb's probed failure
+                 vocabulary (the space-padded ` FAIL ` row column, the
+                 missing-results face) AND the script's exit. Carries
+                 the VHDL fileset only (the ghdl backend compiles VHDL
+                 only, probed). Requires --test-module <path.py> BEFORE
+                 any drive (exit 2 without it); no --top defaults to
+                 $ORBIT_TB_NAME like every sim face
 
 SHARED OPTIONS:
     --blueprint <path>  the TSV blueprint (default: $ORBIT_BLUEPRINT)
@@ -120,6 +133,12 @@ SHARED OPTIONS:
                         and quartus-build (exit 2 without it), rejected
                         on every other face (loud exit-2: this flag is
                         those faces')
+    --test-module <path>
+                        the python test module the cocotb face drives
+                        (a path to a .py file carrying @cocotb.test()
+                        coroutines); REQUIRED on cocotb (exit 2 without
+                        it), rejected on every other face (loud exit-2:
+                        this flag is that face's)
     -h, --help          print this help
 
 TOPS:
@@ -207,6 +226,10 @@ enum Subcommand {
     /// `quartus`: quartus's sim face -- the bundled Questa's vlib/vmap/
     /// vcom compile and the judged vsim runs. DOCUMENTED-ONLY, UNPROBED.
     QuartusSim,
+    /// `cocotb`: the cocotb test face -- the generated runner script
+    /// per top, judged. LIVE (probed on cocotb 2.1.0). Test only: there
+    /// is no cocotb build face.
+    Cocotb,
 }
 
 impl Subcommand {
@@ -220,9 +243,11 @@ impl Subcommand {
             | Subcommand::VerilatorBuild
             | Subcommand::VivadoBuild
             | Subcommand::QuartusBuild
-            // yosys is build-only; the arm exists for match totality --
-            // its drive takes no mode, so this value is never read.
-            | Subcommand::Yosys => blueprint::Mode::Build,
+            // yosys is build-only and cocotb test-only; the arm exists
+            // for match totality -- neither drive takes a mode, so
+            // these values are never read.
+            | Subcommand::Yosys
+            | Subcommand::Cocotb => blueprint::Mode::Build,
             Subcommand::GhdlSim
             | Subcommand::NvcSim
             | Subcommand::IverilogSim
@@ -239,7 +264,7 @@ fn unknown_subcommand(name: &str) -> String {
     format!(
         "no target named {name:?}: carried subcommands: ghdl, ghdl-build, nvc, nvc-build, \
          iverilog, iverilog-build, verilator, verilator-build, yosys, vivado, vivado-build, \
-         quartus, quartus-build"
+         quartus, quartus-build, cocotb"
     )
 }
 
@@ -263,6 +288,9 @@ struct Request {
     tops: Vec<String>,
     /// The `--part` FPGA part, when given (vivado-build's flag only).
     part: Option<String>,
+    /// The `--test-module` python module path, when given (cocotb's
+    /// flag only).
+    test_module: Option<String>,
     /// The argv after `--`, appended to the drive's last tool argv.
     extra: Vec<String>,
 }
@@ -293,12 +321,14 @@ fn parse(argv: &[String]) -> Result<Cli, CliError> {
         "vivado" => Subcommand::VivadoSim,
         "quartus-build" => Subcommand::QuartusBuild,
         "quartus" => Subcommand::QuartusSim,
+        "cocotb" => Subcommand::Cocotb,
         other => return Err(CliError(unknown_subcommand(other))),
     };
 
     let mut blueprint: Option<PathBuf> = None;
     let mut tops = Vec::new();
     let mut part: Option<String> = None;
+    let mut test_module: Option<String> = None;
     let mut extra = Vec::new();
     let mut rest = argv[1..].iter();
     while let Some(arg) = rest.next() {
@@ -333,6 +363,23 @@ fn parse(argv: &[String]) -> Result<Cli, CliError> {
                     .ok_or_else(|| CliError("--part needs a part name".to_string()))?;
                 part = Some(value.clone());
             }
+            // The test module is cocotb's flag, and that face's alone:
+            // on any other face it is a loud usage error, never a
+            // dropped argument -- no other drive imports a python
+            // module.
+            "--test-module" => {
+                if subcommand != Subcommand::Cocotb {
+                    return Err(CliError(
+                        "--test-module is the cocotb face's flag: this face consumes no \
+                         test module"
+                            .to_string(),
+                    ));
+                }
+                let value = rest
+                    .next()
+                    .ok_or_else(|| CliError("--test-module needs a path".to_string()))?;
+                test_module = Some(value.clone());
+            }
             // Orbit strips its own separator before this argv lands here,
             // so this only fires on direct drives: everything after it
             // rides the run verbatim, without a second look.
@@ -351,6 +398,7 @@ fn parse(argv: &[String]) -> Result<Cli, CliError> {
         blueprint,
         tops,
         part,
+        test_module,
         extra,
     }))
 }
@@ -427,6 +475,18 @@ fn drive_request(request: Request) -> ExitCode {
         );
         return ExitCode::from(2);
     }
+    // The test-module gate, BEFORE any drive: the cocotb face names the
+    // python module it imports, and the alternative -- a drive with no
+    // module to import -- is exactly what the exit-2 gate prevents.
+    // Every other face never sees the flag (the argv parser rejects
+    // it), so this gate fires only where the module is required.
+    if request.subcommand == Subcommand::Cocotb && request.test_module.is_none() {
+        eprintln!(
+            "orbit-drives: error: no test module to drive: pass --test-module <path.py>: \
+             the cocotb face names the python module before any drive"
+        );
+        return ExitCode::from(2);
+    }
     if defaulted {
         eprintln!(
             "orbit-drives: note: no --top given; taking the testbench $ORBIT_TB_NAME: {}",
@@ -440,6 +500,7 @@ fn drive_request(request: Request) -> ExitCode {
                 tops,
                 extra: request.extra,
                 part: request.part,
+                test_module: request.test_module,
             },
             request.subcommand.mode(),
         )
@@ -450,6 +511,7 @@ fn drive_request(request: Request) -> ExitCode {
                 tops,
                 extra: request.extra,
                 part: request.part,
+                test_module: request.test_module,
             },
             request.subcommand.mode(),
         )
@@ -460,6 +522,7 @@ fn drive_request(request: Request) -> ExitCode {
                 tops,
                 extra: request.extra,
                 part: request.part,
+                test_module: request.test_module,
             },
             request.subcommand.mode(),
         )
@@ -470,6 +533,7 @@ fn drive_request(request: Request) -> ExitCode {
                 tops,
                 extra: request.extra,
                 part: request.part,
+                test_module: request.test_module,
             },
             request.subcommand.mode(),
         )
@@ -479,6 +543,7 @@ fn drive_request(request: Request) -> ExitCode {
             tops,
             extra: request.extra,
             part: request.part,
+            test_module: request.test_module,
         })
         .map_err(|e| e.exit_code()),
         Subcommand::VivadoBuild | Subcommand::VivadoSim => vivado::drive(
@@ -487,6 +552,7 @@ fn drive_request(request: Request) -> ExitCode {
                 tops,
                 extra: request.extra,
                 part: request.part,
+                test_module: request.test_module,
             },
             request.subcommand.mode(),
         )
@@ -497,9 +563,18 @@ fn drive_request(request: Request) -> ExitCode {
                 tops,
                 extra: request.extra,
                 part: request.part,
+                test_module: request.test_module,
             },
             request.subcommand.mode(),
         )
+        .map_err(|e| e.exit_code()),
+        Subcommand::Cocotb => cocotb::drive(&blueprint::Drive {
+            blueprint,
+            tops,
+            extra: request.extra,
+            part: request.part,
+            test_module: request.test_module,
+        })
         .map_err(|e| e.exit_code()),
     };
     match outcome {
@@ -721,6 +796,45 @@ mod tests {
     fn a_dangling_part_is_a_loud_usage_error() {
         assert!(parse(&argv(&["vivado-build", "--part"])).is_err());
         assert!(parse(&argv(&["quartus-build", "--part"])).is_err());
+    }
+
+    #[test]
+    fn cocotb_is_its_own_subcommand_carrying_the_test_module() {
+        // The single face: `cocotb` is the test drive, test only --
+        // there is no `cocotb-build`. The mode() arm exists for match
+        // totality and is never read by the drive.
+        let request = run_of(
+            parse(&argv(&[
+                "cocotb",
+                "--top",
+                "counter",
+                "--test-module",
+                "tb.py",
+            ]))
+            .unwrap(),
+        );
+        assert_eq!(request.subcommand, Subcommand::Cocotb);
+        assert_eq!(request.subcommand.mode(), blueprint::Mode::Build);
+        assert_eq!(request.test_module, Some("tb.py".to_string()));
+    }
+
+    #[test]
+    fn the_test_module_flag_is_cocotbs_alone() {
+        // Every other face rejects --test-module at the parse: no other
+        // drive imports a python module.
+        assert!(parse(&argv(&["ghdl", "--top", "tb", "--test-module", "tb.py"])).is_err());
+        assert!(parse(&argv(&["quartus", "--top", "tb", "--test-module", "tb.py"])).is_err());
+        let err = parse(&argv(&["vivado", "--top", "tb", "--test-module"])).unwrap_err();
+        assert!(
+            err.0.contains("cocotb face's flag"),
+            "the rejection should name the flag's face: {}",
+            err.0
+        );
+    }
+
+    #[test]
+    fn a_dangling_test_module_is_a_loud_usage_error() {
+        assert!(parse(&argv(&["cocotb", "--test-module"])).is_err());
     }
 
     #[test]

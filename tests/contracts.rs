@@ -165,7 +165,8 @@ fn vocabulary_registry() {
             Tool::Verilator,
             Tool::Yosys,
             Tool::Vivado,
-            Tool::Quartus
+            Tool::Quartus,
+            Tool::Cocotb
         ]
     );
     assert_eq!(Tool::Ghdl.name(), "ghdl");
@@ -956,4 +957,133 @@ fn qrt_vocabulary_is_the_hypothesized_markersim_markers() {
         &["Fatal:", "Error:", "Failure:"]
     );
     assert!(Tool::Quartus.line_anchored());
+}
+
+// ===== the cocotb vocabulary, probed live on cocotb 2.1.0 + ghdl 6.0.0,
+// 2026-11-07 (/tmp/cocotb-probe): the runner's own aggregate faces,
+// never the backing simulator's markers =====
+
+// A real clean pass (`get_runner("ghdl")` driving ghdl -i / -m / -r):
+// the PASS row and the clean summary -- `FAIL=0` shares no shape with
+// the space-padded ` FAIL ` row face.
+const COCO_CLEAN_LOG: &str = "\
+     6.00ns INFO     cocotb.regression                  test_counter.reads_the_first_count passed
+     6.00ns INFO     cocotb.regression                  ********************************************************************************************
+                                                        ** TEST                                STATUS  SIM TIME (ns)  REAL TIME (s)  RATIO (ns/s) **
+                                                        ********************************************************************************************
+                                                        ** test_counter.reads_the_first_count   PASS           6.00           0.00       3747.55  **
+                                                        ********************************************************************************************
+                                                        ** TESTS=1 PASS=1 FAIL=0 SKIP=0                        6.00           0.00       2748.09  **
+                                                        ********************************************************************************************
+cocotb summary: 1 test(s), 0 failed
+";
+
+// A real failing test (`assert dut.count.value.integer == 99`): the
+// AssertionError traceback rides the log, the row column reads FAIL,
+// and the summary counts the failure -- `FAIL=1` alone would miss
+// `FAIL=2`, so the judged face is the space-padded row column.
+const COCO_FAILING_LOG: &str = "\
+     6.00ns WARNING  cocotb.regression                  test_counter_fail.expects_the_wrong_count failed
+                                                        AssertionError: the design is wrong
+                                                        assert 3 == 99
+     6.00ns INFO     cocotb.regression                  ***************************************************************************************************
+                                                        ** TEST                                       STATUS  SIM TIME (ns)  REAL TIME (s)  RATIO (ns/s) **
+                                                        ***************************************************************************************************
+                                                        ** test_counter_fail.expects_the_wrong_count   FAIL           6.00           0.00       3794.54  **
+                                                        ***************************************************************************************************
+                                                        ** TESTS=1 PASS=0 FAIL=1 SKIP=0                               6.00           0.00       1483.59  **
+                                                        ***************************************************************************************************
+cocotb summary: 1 test(s), 1 failed
+";
+
+// The probed missing-results face (a test module that fails to import,
+// or carries no tests): `cocotb_tools.check_results.get_results`
+// raises, the generated runner script relays the message, exit 1.
+const COCO_MISSING_RESULTS_LOG: &str = "\
+ModuleNotFoundError: No module named 'nonexistent_module_xyz'
+ERROR: Simulation terminated abnormally. Results file /tmp/x/sim_build/results.xml not found.
+";
+
+// The probed near-miss pinned on its own: a summary line whose failure
+// counter reads FAIL=0 (or any FAIL=) never judges -- the space padding
+// is load-bearing, bare `FAIL` prose never judges.
+const COCO_SUMMARY_COUNTER_LOG: &str = "\
+** TESTS=3 PASS=3 FAIL=0 SKIP=0
+the testbench says FAIL=0 loudly
+";
+
+// The probed failure logs with the row face drifted to lowercase: not a
+// cocotb face, since the row column is uppercase.
+const COCO_LOWERCASE_DRIFT_LOG: &str = "\
+** tb.expects_the_wrong_count    fail    6.00
+";
+
+#[test]
+fn coco_clean_log_judges_pass() {
+    // The probed clean pass judges PASS: the PASS row, the `FAIL=0`
+    // counter, the script's summary line -- none is a failure face.
+    assert!(contracts::judge(&Tool::Cocotb, COCO_CLEAN_LOG));
+}
+
+#[test]
+fn coco_failing_log_judges_fail() {
+    // The probed failing run judges FAIL on the space-padded row face.
+    // The probed runner exit does NOT convict this run (`ghdl -r` exits
+    // 0 on a failed test -- the finding lands only in results.xml), so
+    // the generated script's honest exit is the load-bearing witness
+    // and this face is the second.
+    assert!(!contracts::judge(&Tool::Cocotb, COCO_FAILING_LOG));
+}
+
+#[test]
+fn coco_missing_results_log_judges_fail() {
+    // The probed missing-results face judges FAIL: a module that fails
+    // to import, a module with no tests, a crashed sim.
+    assert!(!contracts::judge(&Tool::Cocotb, COCO_MISSING_RESULTS_LOG));
+}
+
+#[test]
+fn coco_summary_counter_never_judges() {
+    // The load-bearing padding, pinned on its own: the summary's FAIL
+    // counter and bare `FAIL` prose never judge a clean run.
+    assert!(contracts::judge(&Tool::Cocotb, COCO_SUMMARY_COUNTER_LOG));
+}
+
+#[test]
+fn coco_lowercase_drift_never_matches() {
+    // A lowercase drift of the row face judges PASS: cocotb writes the
+    // status column uppercase, case-exactly.
+    assert!(contracts::judge(&Tool::Cocotb, COCO_LOWERCASE_DRIFT_LOG));
+}
+
+#[test]
+fn coco_each_face_alone_judges_fail() {
+    // Each of cocotb's faces judges FAIL on its own, in an otherwise
+    // clean log.
+    for face in Tool::Cocotb.vocabulary() {
+        let log = format!("cocotb summary: 1 test(s), 0 failed\nnoise {face} tail\n");
+        assert!(
+            !contracts::judge(&Tool::Cocotb, &log),
+            "face {face:?} did not judge its log"
+        );
+    }
+}
+
+#[test]
+fn coco_empty_log_judges_pass() {
+    // An empty log carries no failure face, so it judges PASS.
+    assert!(contracts::judge(&Tool::Cocotb, ""));
+}
+
+#[test]
+fn coco_vocabulary_is_the_two_probed_faces() {
+    // cocotb's vocabulary is the two probed faces: the space-padded
+    // ` FAIL ` row column (the regression table's status face) and the
+    // missing-results face. Not line-anchored: both sit mid-line.
+    assert_eq!(Tool::Cocotb.name(), "cocotb");
+    assert_eq!(
+        Tool::Cocotb.vocabulary(),
+        &[" FAIL ", "Simulation terminated abnormally"]
+    );
+    assert!(!Tool::Cocotb.line_anchored());
 }

@@ -159,6 +159,12 @@ pub struct Drive {
     /// read it -- the argv parser rejects the flag on every other face,
     /// so every other drive sees `None` here.
     pub part: Option<String>,
+    /// The python test module the cocotb face drives (`--test-module`,
+    /// a path to a `.py` file carrying `@cocotb.test()` coroutines).
+    /// Only the cocotb face reads it, and only there is it REQUIRED --
+    /// the argv parser rejects the flag on every other face, so every
+    /// other drive sees `None` here.
+    pub test_module: Option<String>,
 }
 
 /// The note for a blueprint plan the drive does not carry: orbit exports

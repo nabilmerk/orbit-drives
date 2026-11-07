@@ -32,12 +32,16 @@
 # fallback). DOCUMENTED-ONLY: the faces are hypotheses, UNPROBED -- see
 # the README's honest limits. The quartus sim face consumes no --part.
 #
+#   orbit test --target cocotb --test-module tb_counter.py
+#   orbit test --target cocotb --test-module tests/tb_counter.py -- --vcd=w.vcd
+#
 # No --top is needed for the sim faces through `orbit test`: the drive
 # runs the testbench orbit exports as $ORBIT_TB_NAME (through `orbit
 # build`, pass -- --top <name>). Everything after orbit's `--` rides the
 # drive's last tool argv verbatim: the `ghdl -r` / `nvc -r` / `vvp` argv
 # on the sim faces, the `ghdl -e` / `nvc -e` / `iverilog` compile /
-# verilator build argv on the build faces.
+# verilator build argv on the build faces -- and on cocotb, the runner's
+# test_args (the backing simulator's run argv).
 
 [[target]]
 name = "ghdl"
@@ -110,3 +114,15 @@ command = ["orbit-drives", "quartus-build"]
 name = "quartus"
 description = "VHDL testbenches through Quartus's bundled Questa (DOCUMENTED-ONLY, UNPROBED): vlib work, vmap work work, vcom -2008 -work work per VHDL file through the deferral loop, then per top `vsim -c -do \"run -all; quit\" -L work work.<top>`, every run log gated on the hypothesized ModelSim-family LINE-START vocabulary (Fatal:/Error:/Failure:, UNPROBED) AND the exit (vsim honest, UNPROBED) -- neither witness is trusted alone. Carries the VHDL fileset only (the documented recipe is vcom's); the sim face consumes no --part"
 command = ["orbit-drives", "quartus"]
+
+# The cocotb target is LIVE: probed on cocotb 2.1.0 + ghdl 6.0.0. Needs
+# cocotb (>= 2.0, the cocotb_tools runner package) and ghdl on PATH. The
+# python test module is REQUIRED (--test-module path.py, exit 2 absent);
+# its file stem names the module the runner imports and its directory
+# rides PYTHONPATH. Everything after orbit's `--` rides the runner's
+# test_args (the backing simulator's run argv).
+
+[[target]]
+name = "cocotb"
+description = "VHDL testbenches through cocotb's own runner (LIVE, probed on cocotb 2.1.0): the generated runner script per top drives cocotb_tools.runner over ghdl (the runner IS the compile: ghdl -i / -m / -r), reads results.xml, and exits honest -- the load-bearing exit, probed: the runner exits 0 on a failed test (the finding lands only in results.xml). Every run log gated on cocotb's probed failure vocabulary (the space-padded ` FAIL ` row column, the missing-results face) AND the script's exit. Carries the VHDL fileset only (the ghdl backend compiles VHDL only, probed); requires --test-module <path.py>"
+command = ["orbit-drives", "cocotb"]

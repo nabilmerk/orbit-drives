@@ -344,8 +344,8 @@ fn the_real_vivado_build_face_requires_the_part_before_any_drive() {
         String::from_utf8_lossy(&wrong.stderr)
     );
     assert!(
-        String::from_utf8_lossy(&wrong.stderr).contains("--part is the vivado-build face's flag"),
-        "the rejection should name the flag's face:\n{}",
+        String::from_utf8_lossy(&wrong.stderr).contains("--part is the build faces' flag"),
+        "the rejection should name the flag's faces:\n{}",
         String::from_utf8_lossy(&wrong.stderr)
     );
 }

@@ -34,8 +34,15 @@
 //!   face. Every face is the documented hypothesis, UNPROBED -- no
 //!   quartus on the probing box; every hypothesis carries its
 //!   first-contact rule in the README's honest limits.
+//! - [`cocotb`]: the cocotb test drive -- cocotb's own python runner
+//!   (`cocotb_tools.runner`, probed live on 2.1.0) over ghdl, the
+//!   results.xml verdict read by the generated runner script, the log
+//!   judged by cocotb's probed faces. Test only: there is no build face
+//!   and no compile step of this drive's own -- the runner IS the
+//!   compile.
 
 pub mod blueprint;
+pub mod cocotb;
 pub mod contracts;
 pub mod ghdl;
 pub mod iverilog;

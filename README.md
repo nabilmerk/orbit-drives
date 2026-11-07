@@ -114,6 +114,15 @@ Subcommands (one per orbit target entry):
   on the hypothesized ModelSim-family LINE-START vocabulary
   (`Fatal:` / `Error:` / `Failure:`, UNPROBED) AND the exit (vsim honest,
   UNPROBED). Neither witness is trusted alone.
+- `cocotb` -- the cocotb test face, LIVE: cocotb's own python runner
+  (`cocotb_tools.runner` over ghdl -- the runner IS the compile) driven
+  by a GENERATED runner script per top, which reads results.xml and
+  exits honest -- the load-bearing exit, probed: the runner exits 0 on a
+  failed test (the finding lands only in results.xml). Every run log is
+  gated on cocotb's probed failure vocabulary (the space-padded
+  ` FAIL ` row column, the missing-results face) AND the script's exit.
+  Carries the VHDL fileset only (the ghdl backend compiles VHDL only,
+  probed).
 
 Options:
 
@@ -129,13 +138,22 @@ Options:
   drive, exit 2 naming the flag -- and REJECTED on every other face
   (loud exit-2: the sim faces consume no part, and the other tools do
   not speak one).
+- `--test-module <path>` -- the python test module the `cocotb` face
+  drives (a path to a `.py` file carrying `@cocotb.test()`
+  coroutines). REQUIRED on `cocotb` -- the gate fires before any drive,
+  exit 2 naming the flag -- and REJECTED on every other face (loud
+  exit-2: no other drive imports a python module). The file stem names
+  the module the runner imports; its directory rides the spawned
+  python's `PYTHONPATH`.
 - anything else -- a tool extra, appended verbatim to the drive's LAST
   tool argv: each `ghdl -r` / `nvc -r` / `vvp` / `xsim` / `vsim` on the
   sim faces, each `ghdl -e` / `nvc -e` / the `iverilog` compile / the
   `yosys -p` synth / `vivado -mode batch` / `quartus_map` on the build
-  faces (there is no run to carry them, and a dropped argument would be
-  a silent degradation; an option the elaboration does not speak is the
-  tool's own loud rejection, surfaced as an exit-1 failure).
+  faces, and on cocotb the runner's `test_args` (the backing simulator's
+  run argv). There is no later step to carry them, and a dropped
+  argument would be a silent degradation; an option the tool does not
+  speak is the tool's own loud rejection, surfaced as an exit-1
+  failure.
 
 Exits:
 
@@ -479,6 +497,68 @@ lookup for the whole family.
   vocabulary's negative pins are hypothesized from vivado's probed
   ones: a case drift (`FATAL:`) and a marker mid-line never judge.
 
+## The cocotb drive
+
+ONE target entry (`cocotb`) drives cocotb -- the test face only: there
+is no build face and no compile step of this drive's own, because
+cocotb's own runner IS the compile. The shapes the probes wrote down
+(cocotb 2.1.0 + ghdl 6.0.0, 2026-11-07):
+
+- **The runner is a python API, not a module invocation.**
+  `python -m cocotb.runner` does not exist in cocotb 2.x (the module
+  was retired with the 2.0 split, and the 1.x Makefile flow with it --
+  no `TOPLEVEL` / `SIM` env vars; 2.x renames them `COCOTB_TOPLEVEL` /
+  `COCOTB_TEST_MODULES`, set by the runner itself). The runner lives in
+  the separate `cocotb_tools` distribution package:
+  `cocotb_tools.runner.get_runner("ghdl")`, then `runner.build(...)` and
+  `runner.test(...)`. A 1.x install answers the drive's identity probe
+  (`python3 -c "import cocotb, cocotb_tools.runner"`) with a nonzero
+  exit -- a loud usage error, never a mid-drive failure.
+- **The runner invocation is GENERATED per top** -- the
+  vivado-generated-synth-script precedent, in python: the drive writes
+  `orbit-cocotb-<top>.py` (get_runner("ghdl"), `runner.build(sources=...,
+  hdl_toplevel=<top>, build_dir="sim_build", always=True)`,
+  `runner.test(test_module=<stem>, hdl_toplevel=<top>, ...)`) and spawns
+  it once per top. The file paths ride the script as escaped python
+  string literals -- machine-written python carries them EXACTLY, so
+  the whitespace-split v1 limit the other script faces document does
+  not exist here.
+- **The exit contract is probed, and the runner lies by omission:**
+  `ghdl -r` exits 0 on a FAILED cocotb test -- the finding lands only
+  in results.xml -- so the generated script reads the results itself
+  (`cocotb_tools.check_results.get_results`) and exits honest: nonzero
+  on any failed test. That script exit is the load-bearing exit
+  witness, probed into existence by the runner's own dishonesty; the
+  vocabulary is the second witness on the same log. A simulator-level
+  crash DOES exit the runner nonzero (`Simulation failed: <rc>`), and
+  the missing-results face
+  (`ERROR: Simulation terminated abnormally. Results file ... not
+  found.`) relays through the script -- a test module that fails to
+  import, or carries no tests, lands there.
+- **The vocabulary is cocotb's own aggregate faces, never the backing
+  simulator's markers.** The probed faces: the space-padded ` FAIL `
+  row column of the runner's regression summary table (the padding is
+  load-bearing -- the clean summary's own `FAIL=0` counter shares no
+  shape with it, so the summary never judges a clean run), and the
+  missing-results face above. A cocotb log is a ghdl log, and ghdl's
+  lowercase faces belong to the ghdl drive; cocotb aggregates.
+- **The test module rides the argv, not the blueprint.**
+  `--test-module <path.py>` is REQUIRED (exit 2 before any drive,
+  naming the flag; rejected on every other face). The file stem names
+  the module the runner imports; its directory rides the spawned
+  python's `PYTHONPATH`, because the runner passes its own `sys.path`
+  down to the simulation. The extras ride the script's `test_args` --
+  the runner's documented channel to the backing simulator's run argv.
+- **The fileset door is probed shut.** The ghdl backend compiles VHDL
+  only -- the runner itself refuses every other source (`ValueError:
+  Ghdl only supports VHDL. ...` in its own `_build_command`), so the
+  drive carries the `VHDL` fileset alone and every other entry is the
+  loud not-carried face (exit 2).
+- **The build directory (`sim_build/`) is wiped before every drive** --
+  the same correctness-before-incrementality stance, though probed
+  honestly: the wipe is symmetry here (the runner unlinks the results
+  file before each test and `always=True` rebuilds).
+
 ## The probed facts
 
 Every pattern in a vocabulary and every drive fact below was probed live
@@ -615,22 +695,42 @@ by the drive; `.Xil/` and the stage logs (`xvhdl.log`, `xvlog.log`,
 `xsim.log`, `xsim.jou`) land in the working directory and are the tools'
 own scratch.
 
+### cocotb 2.1.0 (+ ghdl 6.0.0, the backing simulator)
+
+| face / fact | argv that wrote it | what cocotb/the runner did |
+|------|-----|------|
+| `** test_counter.reads_the_first_count   PASS ...`, then `** TESTS=1 PASS=1 FAIL=0 SKIP=0` | `get_runner("ghdl")`; `build(sources=[counter.vhd], hdl_toplevel="counter", always=True)`; `test(test_module="test_counter", hdl_toplevel="counter")` | the clean pass: the regression table's PASS row and the clean summary, **exit 0** through the generated script |
+| `** test_counter_fail.expects_the_wrong_count   FAIL ...`, then `** TESTS=1 PASS=0 FAIL=1 SKIP=0` (+ the `AssertionError: the design is wrong` traceback above) | the same runner call, `test_module="test_counter_fail"` | a failed assert: the row column reads FAIL, the summary counts it -- and **`ghdl -r` EXITS 0**: the finding lands only in results.xml, the generated script's `get_results` verdict is the load-bearing exit (exit 1) |
+| `ERROR: Simulation terminated abnormally. Results file ... not found.` | `test_module` naming a module that fails to import (or carries no tests: `RuntimeError: No tests were discovered in any module: ...`) | the sim dies before results.xml is written; `cocotb_tools.check_results.get_results` raises, the generated script relays the message, **exit 1** -- the crash door |
+| `Simulation failed: <rc>` (the runner's log), then the script exits with the sim's code | the runner's own `_execute` on a nonzero simulator exit | a SIMULATOR-level failure exits the runner nonzero -- honest; only the failed-TEST exit lies |
+| `python -m cocotb.runner` does not exist; `TOPLEVEL`/`SIM` env vars do not exist | the 2.x runner face | the runner is `cocotb_tools.runner.get_runner(...)`, the env vars renamed (`COCOTB_TOPLEVEL`, `COCOTB_TEST_MODULES`, `COCOTB_RESULTS_FILE`), all set by the runner itself |
+| `ValueError: Ghdl only supports VHDL. '<file>' cannot be compiled.` | the runner's own `_build_command` on a non-VHDL source | the ghdl backend compiles VHDL only -- the drive's fileset door, probed shut |
+| the runner unlinks `results.xml` before each test; `build_dir` defaults to `sim_build` | the runner's source, probed behavior | the stale-results door is closed by the runner; the drive's own `sim_build/` wipe is symmetry |
+
+cocotb's row column is uppercase `FAIL`, space-padded on both sides --
+case-exact, and the padding is load-bearing: the clean summary's own
+`FAIL=0` counter (and bare `FAIL` prose) shares no shape with ` FAIL `,
+so it never judges a clean run. The faces are cocotb's OWN aggregates:
+the backing simulator's lowercase ghdl faces belong to the ghdl
+vocabulary, never this one.
+
 ## Honest limits
 
-- **The filesets are per tool.** The VHDL drives (`ghdl`, `nvc`) carry
-  the `VHDL` fileset only; the Verilog drives (`iverilog`, `verilator`,
-  `yosys`) carry `VLOG` and `SYSV` (their native filesets) and reject
-  `VHDL` and custom filesets with a loud exit-2 ("not yet carried"),
-  never a silent skip. The vivado drives and the quartus-build face
-  carry all three (`VHDL` + `VLOG` + `SYSV`) and reject only custom
-  filesets -- vivado is the one PROBED tool that speaks both languages,
-  quartus-build the documented-only second; the quartus sim face carries
-  the `VHDL` fileset only (the documented recipe is vcom's alone).
-- **Seven tool names, seven vocabularies: ghdl, nvc, iverilog,
-  verilator, yosys, vivado, quartus.** Any other tool name is a loud
-  error at the CLI, never a guess. Six vocabularies are probed; the
-  seventh (quartus) is the documented-only ModelSim-family hypothesis
-  (below).
+- **The filesets are per tool.** The VHDL drives (`ghdl`, `nvc`,
+  `cocotb`) carry the `VHDL` fileset only; the Verilog drives
+  (`iverilog`, `verilator`, `yosys`) carry `VLOG` and `SYSV` (their
+  native filesets) and reject `VHDL` and custom filesets with a loud
+  exit-2 ("not yet carried"), never a silent skip. The vivado drives
+  and the quartus-build face carry all three (`VHDL` + `VLOG` + `SYSV`)
+  and reject only custom filesets -- vivado is the one PROBED tool that
+  speaks both languages, quartus-build the documented-only second; the
+  quartus sim face carries the `VHDL` fileset only (the documented
+  recipe is vcom's alone).
+- **Eight tool names, eight vocabularies: ghdl, nvc, iverilog,
+  verilator, yosys, vivado, quartus, cocotb.** Any other tool name is a
+  loud error at the CLI, never a guess. Seven vocabularies are probed;
+  the eighth (quartus) is the documented-only ModelSim-family
+  hypothesis (below).
 - **quartus is DOCUMENTED-ONLY -- every sentence about it is a
   hypothesis carrying its first-contact rule.** quartus is not
   installed on the probing box, so none of its faces are probed. The
@@ -676,50 +776,66 @@ own scratch.
   and builds as one verilator fileset; a multi-library orbit project is
   out of scope for v1.
 - **The standards are pinned where the tools pin them** (`--std=08` for
-  ghdl, `--std=2008` for nvc, `-g2012` for iverilog; verilator's pinned
-  flags are `--timing` and the face flags -- its language setting stays
-  verilator's default in v1) and cannot be overridden from the argv yet;
-  the extras reach the drive's last step only (`-r` on the VHDL sim
-  faces, `vvp` on iverilog's, the model argv on verilator's, the
-  `yosys -p` synth argv on yosys's; the elaboration / compile / build
+  ghdl, `--std=2008` for nvc, `-g2012` for iverilog, `-2008` for the
+  quartus sim face's vcom -- vcom's spelling of the same VHDL-2008 pin;
+  verilator's pinned flags are `--timing` and the face flags -- its
+  language setting stays verilator's default in v1; cocotb's backing
+  simulator compiles under ghdl's runner default, no std pin in v1) and
+  cannot be overridden from the argv yet; the extras reach the drive's
+  last step only (`-r` on the VHDL sim faces, `vvp` on iverilog's, the
+  model argv on verilator's, the `yosys -p` synth argv on yosys's, the
+  runner's `test_args` on cocotb's; the elaboration / compile / build
   argv on the build faces).
 - **The state is run-scoped, not incremental.** Every drive wipes its
   clock first (the work libraries; iverilog's snapshot; verilator's
   `obj_dir`; yosys's `netlists/`; vivado's `xsim.dir/` and, on the build
-  face, its `netlists/`). A large design pays a full re-analysis per
-  drive; correctness before incrementality is the v1 stance. (Probed
-  honestly: ghdl's wipe is load-bearing -- a stale library obsoletes its
-  own design; nvc tolerates the stale library, iverilog's snapshot
-  cannot be run past a failed compile, verilator's `--build` regenerates
-  its intermediates, a failed yosys synth exits before its netlist could
-  be mistaken for fresh, and a failed vivado compile or elaboration
-  exits before the sim face could run a stale snapshot -- so those wipes
+  face, its `netlists/`; the quartus sim face's `work/` +
+  `modelsim.ini`, DOCUMENTED-ONLY; cocotb's `sim_build/`). A large
+  design pays a full re-analysis per drive; correctness before
+  incrementality is the v1 stance. (Probed honestly: ghdl's wipe is
+  load-bearing -- a stale library obsoletes its own design; nvc
+  tolerates the stale library, iverilog's snapshot cannot be run past a
+  failed compile, verilator's `--build` regenerates its intermediates, a
+  failed yosys synth exits before its netlist could be mistaken for
+  fresh, a failed vivado compile or elaboration exits before the sim
+  face could run a stale snapshot, and cocotb's runner unlinks the
+  results file before each test and always rebuilds -- so those wipes
   are symmetry.)
-- **Bare ghdl and bare vvp have holes; bare xsim is worse; the shipped
-  paths catch them.** A `report ... severity error` statement slips a
-  bare `ghdl -r` (face `(report error)`, exit 0, no judged face): the
-  drive pins `--assert-level=error`, which stops the run and writes the
+- **Bare ghdl and bare vvp have holes; bare xsim is worse; the cocotb
+  runner lies by omission; the shipped paths catch them.** A
+  `report ... severity error` statement slips a bare `ghdl -r` (face
+  `(report error)`, exit 0, no judged face): the drive pins
+  `--assert-level=error`, which stops the run and writes the
   `./<top>:error: report failed` face. A `$error` call slips a bare vvp
   (face `ERROR: ...`, simulation continued, **exit 0**): there the
   judge's face gate is the only witness, and it is load-bearing. xsim is
   the extreme -- BOTH probed runtime failures exit 0 (a severity failure
   and a severity error) -- so the vivado drive's judge is the
   load-bearing gate on every run, and the line-start vocabulary is the
-  only witness on them. nvc, verilator, and yosys have no such hole
+  only witness on them. The cocotb runner's lie is by omission: `ghdl -r`
+  exits 0 on a FAILED test (the finding lands only in results.xml), so
+  the generated script reads the results and exits honest -- the
+  load-bearing exit there. nvc, verilator, and yosys have no such hole
   probed: nvc's severity-error runs continue the simulation but still
   exit 1, every verilator model failure dies by SIGABRT -- no exit code
   at all -- and every probed yosys failure exits 1, so their exits
   convict.
-- **A face shape mid-text judges fail -- except on vivado.** The
+- **A face shape mid-text judges fail -- except on vivado (and
+  quartus, riding vivado's anchor on the documented hypothesis).** The
   substring vocabularies cannot tell your prose from the tool's: a
   testbench's own report note that embeds a ghdl face shape
   (`bus:error: retrying`), an nvc face shape (`** Error: retrying`), a
   vvp face shape (`ERROR: retrying`), a verilator face shape
   (`%Error: retrying`), or a yosys face shape (`ERROR: retrying`)
-  convicts the run. vivado is the deliberate exception: its faces are
-  line-anchored, so only a line LEADING with the marker convicts and
-  mid-text prose never does. Keep report notes and `$display` text free
-  of face shapes anyway.
+  convicts the run. vivado is the deliberate probed exception: its
+  faces are line-anchored, so only a line LEADING with the marker
+  convicts and mid-text prose never does. cocotb's ` FAIL ` row face is
+  a substring face with one guard: the space padding keeps the
+  summary's own `FAIL=0` counter (and bare `FAIL` prose) from judging,
+  but a TEST NAME carrying the space-padded shape (`tb FAIL demo`)
+  would still convict a clean run -- keep test names free of face
+  shapes. Keep report notes and `$display` text free of face shapes
+  anyway.
 - **Verilator builds need a C++ toolchain.** `--binary --build` shells
   out to `make` and the system C++ compiler (probed on this box with
   both on PATH); a box without them fails the build step loudly,
@@ -734,6 +850,10 @@ own scratch.
   fallback, and its stage binaries ride beside the resolved path (or on
   PATH); quartus resolves from `$QUARTUS_BIN` the same way, its bundled
   Questa deriving as the `questa_fse/bin` sibling (DOCUMENTED-ONLY).
+  The cocotb drive pins `python3` and needs cocotb (>= 2.0: the
+  `cocotb_tools` runner package -- a 1.x install is a loud usage error
+  at the identity probe) and the backing simulator (ghdl) on PATH; the
+  runner resolves the simulator itself and names it loudly when absent.
   The vivado recipe env rides the drive's own spawn scoping -- see the
   launch recipe.
 - **Blueprint paths with spaces are a v1 limit on the script faces.**
@@ -772,13 +892,15 @@ fixture-for-fixture (upstream: `github.com/chaseruskin/aquila`,
 `tests/test_contracts.py`) and extends them with the probed faces of the
 other tools: the real failing logs judge fail; the clean logs (including
 the one mentioning "ERROR" mid-text) judge pass; the uppercase (ghdl) and
-lowercase (nvc, vvp, verilator, yosys) drifts never judge; vivado's pins
-run both ways -- its faces judge at line start only, and a case drift or
-a marker mid-line never judges; the severity-error, `$error`,
-model-abort, and lying-xsim-exit faces judge fail; the warning/note
-faces stay clean; and the registry pins exactly the carried tools. The
-drive suites pin the deferral loop (a consumer-before-provider pair must
-retry), the no-progress stop, the TSV blueprint parse, the crash door (a
-clean log does not green-light a nonzero exit), the Tcl catch-guard
-shape, and the judge gate on fake severity-error logs for the VHDL
-tools.
+lowercase (nvc, vvp, verilator, yosys, cocotb) drifts never judge;
+vivado's pins run both ways -- its faces judge at line start only, and a
+case drift or a marker mid-line never judges; the severity-error,
+`$error`, model-abort, and lying-xsim-exit faces judge fail; cocotb's
+`FAIL=0` summary counter and bare `FAIL` prose stay clean while the
+space-padded row face judges; the warning/note faces stay clean; and the
+registry pins exactly the carried tools. The drive suites pin the
+deferral loop (a consumer-before-provider pair must retry), the
+no-progress stop, the TSV blueprint parse, the crash door (a clean log
+does not green-light a nonzero exit), the Tcl catch-guard shape, the
+generated runner-script shape, and the judge gate on fake severity-error
+logs for the VHDL tools.
