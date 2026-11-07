@@ -68,8 +68,7 @@ fn the_real_verilator_spawn_shape_runs_twice_and_builds_without_a_sim() {
         return;
     }
 
-    let out =
-        std::env::temp_dir().join(format!("orbit-contracts-ver-shape-{}", std::process::id()));
+    let out = std::env::temp_dir().join(format!("orbit-drives-ver-shape-{}", std::process::id()));
     fs::create_dir_all(&out).unwrap();
 
     // gate <- top <- tb, handed over consumer-first: the order a
@@ -102,7 +101,7 @@ endmodule
     // The exact spawn shape: no `--top`, `$ORBIT_TB_NAME` exported, the
     // working directory at the target's output directory.
     let first = spawn_shape(
-        Command::new(env!("CARGO_BIN_EXE_orbit-contracts")).arg("verilator"),
+        Command::new(env!("CARGO_BIN_EXE_orbit-drives")).arg("verilator"),
         &out,
         "tb",
     )
@@ -144,7 +143,7 @@ endmodule
     // clock clean (and probed honestly: verilator's --build would
     // tolerate the stale directory anyway).
     let second = spawn_shape(
-        Command::new(env!("CARGO_BIN_EXE_orbit-contracts")).arg("verilator"),
+        Command::new(env!("CARGO_BIN_EXE_orbit-drives")).arg("verilator"),
         &out,
         "tb",
     )
@@ -160,7 +159,7 @@ endmodule
     // The build face on the same blueprint: lint + the model build,
     // exit honest, and NO run -- there is no `running` line to find.
     let build = spawn_shape(
-        Command::new(env!("CARGO_BIN_EXE_orbit-contracts")).arg("verilator-build"),
+        Command::new(env!("CARGO_BIN_EXE_orbit-drives")).arg("verilator-build"),
         &out,
         "tb",
     )
@@ -197,8 +196,7 @@ fn the_real_verilator_drive_judges_a_fatal_model() {
     // model prints the %Fatal face, the %Error $stop line, and
     // `Aborting...`, then dies by SIGABRT -- no exit code (the drive
     // records -1) -- so the exit convicts AND the face convicts.
-    let fail =
-        std::env::temp_dir().join(format!("orbit-contracts-ver-fail-{}", std::process::id()));
+    let fail = std::env::temp_dir().join(format!("orbit-drives-ver-fail-{}", std::process::id()));
     fs::create_dir_all(&fail).unwrap();
     write(
         &fail.join("tb_fatal.sv"),
@@ -222,7 +220,7 @@ endmodule
     );
 
     let run = spawn_shape(
-        Command::new(env!("CARGO_BIN_EXE_orbit-contracts")).arg("verilator"),
+        Command::new(env!("CARGO_BIN_EXE_orbit-drives")).arg("verilator"),
         &fail,
         "tb_fatal",
     )
@@ -262,7 +260,7 @@ fn the_real_verilator_drive_relays_a_lint_failure() {
     // A lint-broken file, through the whole drive: verilator's own
     // stderr relayed verbatim, exit 1, and no build or run after it.
     let broken =
-        std::env::temp_dir().join(format!("orbit-contracts-ver-broken-{}", std::process::id()));
+        std::env::temp_dir().join(format!("orbit-drives-ver-broken-{}", std::process::id()));
     fs::create_dir_all(&broken).unwrap();
     write(
         &broken.join("broken.sv"),
@@ -275,7 +273,7 @@ endmodule
     write(&broken.join("blueprint.tsv"), "SYSV\twork\t./broken.sv\n");
 
     let run = spawn_shape(
-        Command::new(env!("CARGO_BIN_EXE_orbit-contracts")).arg("verilator"),
+        Command::new(env!("CARGO_BIN_EXE_orbit-drives")).arg("verilator"),
         &broken,
         "broken",
     )
@@ -322,7 +320,7 @@ endmodule
     write(&broken.join("blueprint.tsv"), "SYSV\twork\t./ok.sv\n");
 
     let run = spawn_shape(
-        Command::new(env!("CARGO_BIN_EXE_orbit-contracts")).arg("verilator"),
+        Command::new(env!("CARGO_BIN_EXE_orbit-drives")).arg("verilator"),
         &broken,
         "nosuch",
     )

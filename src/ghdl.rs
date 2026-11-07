@@ -230,7 +230,7 @@ pub fn drive(request: &Drive, mode: Mode) -> Result<(), DriveError> {
     if let Err(e) = fs::remove_file(WORK_LIBRARY_FILE) {
         if e.kind() != std::io::ErrorKind::NotFound {
             let message = format!("cannot wipe the stale work library {WORK_LIBRARY_FILE}: {e}");
-            eprintln!("orbit-contracts: ghdl: error: {message}");
+            eprintln!("orbit-drives: ghdl: error: {message}");
             return Err(DriveError::Library(message));
         }
     }
@@ -247,38 +247,38 @@ pub fn drive(request: &Drive, mode: Mode) -> Result<(), DriveError> {
             path: request.blueprint.clone(),
             source,
         };
-        eprintln!("orbit-contracts: ghdl: error: {e}");
+        eprintln!("orbit-drives: ghdl: error: {e}");
         DriveError::Blueprint(e)
     })?;
     let entries = parse_blueprint(&text).map_err(|e| {
         let e = BlueprintError::Parse(e);
-        eprintln!("orbit-contracts: ghdl: error: {e}");
+        eprintln!("orbit-drives: ghdl: error: {e}");
         DriveError::Blueprint(e)
     })?;
     let files = vhdl_only(&entries).map_err(|e| {
-        eprintln!("orbit-contracts: ghdl: error: {e}");
+        eprintln!("orbit-drives: ghdl: error: {e}");
         DriveError::NotCarried(e)
     })?;
 
     println!(
-        "orbit-contracts: ghdl: {label}: analyzing {} VHDL file(s) in blueprint order",
+        "orbit-drives: ghdl: {label}: analyzing {} VHDL file(s) in blueprint order",
         files.len()
     );
     let report = analyze_with_deferral(&files, analyze_once);
     println!(
-        "orbit-contracts: ghdl: {label}: {} file(s) analyzed in {} pass(es)",
+        "orbit-drives: ghdl: {label}: {} file(s) analyzed in {} pass(es)",
         report.analyzed.len(),
         report.passes
     );
     if !report.residual.is_empty() {
         eprintln!(
-            "orbit-contracts: ghdl: error: {} file(s) never analyzed after {} pass(es)",
+            "orbit-drives: ghdl: error: {} file(s) never analyzed after {} pass(es)",
             report.residual.len(),
             report.passes
         );
         for residual in &report.residual {
             eprintln!(
-                "orbit-contracts: ghdl: error: analyze failed: {}",
+                "orbit-drives: ghdl: error: analyze failed: {}",
                 residual.path.display()
             );
             eprint_block(&residual.stderr);
@@ -288,7 +288,7 @@ pub fn drive(request: &Drive, mode: Mode) -> Result<(), DriveError> {
 
     let mut findings = Vec::new();
     for top in &request.tops {
-        println!("orbit-contracts: ghdl: {label}: elaborating {top}");
+        println!("orbit-drives: ghdl: {label}: elaborating {top}");
         let mut elaborate = Command::new(GHDL_BIN);
         elaborate.args(["-e", STD]).arg(top);
         // The extras ride the drive's last step verbatim: the run argv on
@@ -304,7 +304,7 @@ pub fn drive(request: &Drive, mode: Mode) -> Result<(), DriveError> {
         if !output.status.success() {
             let stderr = lossy(&output.stderr);
             eprint_block(&stderr);
-            eprintln!("orbit-contracts: ghdl: error: ghdl -e failed for {top}");
+            eprintln!("orbit-drives: ghdl: error: ghdl -e failed for {top}");
             return Err(DriveError::Elaborate {
                 top: top.clone(),
                 stderr,
@@ -312,19 +312,19 @@ pub fn drive(request: &Drive, mode: Mode) -> Result<(), DriveError> {
         }
 
         match mode {
-            Mode::Build => println!("orbit-contracts: ghdl: {label}: {top}: elaborated"),
+            Mode::Build => println!("orbit-drives: ghdl: {label}: {top}: elaborated"),
             Mode::Sim => {
                 let outcome = run_top(top, &request.extra, label)?;
                 if outcome.clean() {
-                    println!("orbit-contracts: ghdl: {label}: {top}: pass");
+                    println!("orbit-drives: ghdl: {label}: {top}: pass");
                 } else if outcome.has_face() {
                     println!(
-                        "orbit-contracts: ghdl: {label}: {top}: fail (the log carries a probed ghdl failure face)"
+                        "orbit-drives: ghdl: {label}: {top}: fail (the log carries a probed ghdl failure face)"
                     );
                     findings.push(outcome);
                 } else {
                     println!(
-                        "orbit-contracts: ghdl: {label}: {top}: fail (ghdl exited {} without a judged face)",
+                        "orbit-drives: ghdl: {label}: {top}: fail (ghdl exited {} without a judged face)",
                         outcome.exit
                     );
                     findings.push(outcome);
@@ -337,7 +337,7 @@ pub fn drive(request: &Drive, mode: Mode) -> Result<(), DriveError> {
         Ok(())
     } else {
         eprintln!(
-            "orbit-contracts: ghdl: error: {} run(s) carried a finding",
+            "orbit-drives: ghdl: error: {} run(s) carried a finding",
             findings.len()
         );
         Err(DriveError::Findings(findings))
@@ -347,7 +347,7 @@ pub fn drive(request: &Drive, mode: Mode) -> Result<(), DriveError> {
 /// Run one elaborated top and capture its log: `ghdl -r --std=08 <top>
 /// --assert-level=error <extras>`.
 fn run_top(top: &str, extra: &[String], label: &str) -> Result<RunOutcome, DriveError> {
-    println!("orbit-contracts: ghdl: {label}: running {top}");
+    println!("orbit-drives: ghdl: {label}: running {top}");
     // `--assert-level=error` rides AFTER the top unit: it is a
     // simulation option, and ghdl rejects it anywhere earlier.
     let mut run = Command::new(GHDL_BIN);
@@ -411,8 +411,7 @@ tb_err.vhd:9:5:@0ms:(report note): simulation continued
 ";
 
     fn temp_dir(name: &str) -> PathBuf {
-        let dir =
-            std::env::temp_dir().join(format!("orbit-contracts-{name}-{}", std::process::id()));
+        let dir = std::env::temp_dir().join(format!("orbit-drives-{name}-{}", std::process::id()));
         fs::create_dir_all(&dir).unwrap();
         dir
     }

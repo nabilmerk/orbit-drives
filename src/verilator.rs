@@ -203,7 +203,7 @@ pub fn drive(request: &Drive, mode: Mode) -> Result<(), DriveError> {
     if let Err(e) = fs::remove_dir_all(OBJ_DIR) {
         if e.kind() != std::io::ErrorKind::NotFound {
             let message = format!("cannot wipe the stale model directory {OBJ_DIR}/: {e}");
-            eprintln!("orbit-contracts: verilator: error: {message}");
+            eprintln!("orbit-drives: verilator: error: {message}");
             return Err(DriveError::Library(message));
         }
     }
@@ -220,12 +220,12 @@ pub fn drive(request: &Drive, mode: Mode) -> Result<(), DriveError> {
             path: request.blueprint.clone(),
             source,
         };
-        eprintln!("orbit-contracts: verilator: error: {e}");
+        eprintln!("orbit-drives: verilator: error: {e}");
         DriveError::Blueprint(e)
     })?;
     let entries = parse_blueprint(&text).map_err(|e| {
         let e = BlueprintError::Parse(e);
-        eprintln!("orbit-contracts: verilator: error: {e}");
+        eprintln!("orbit-drives: verilator: error: {e}");
         DriveError::Blueprint(e)
     })?;
     // The fileset door is the Verilog drives' shared one: iverilog and
@@ -233,25 +233,25 @@ pub fn drive(request: &Drive, mode: Mode) -> Result<(), DriveError> {
     // with the blueprint machinery, its message with the first Verilog
     // drive.
     let files = verilog_only(&entries).map_err(|e| {
-        eprintln!("orbit-contracts: verilator: error: {e}");
+        eprintln!("orbit-drives: verilator: error: {e}");
         DriveError::NotCarried(e)
     })?;
 
     println!(
-        "orbit-contracts: verilator: {label}: linting {} Verilog file(s) with --timing \
+        "orbit-drives: verilator: {label}: linting {} Verilog file(s) with --timing \
          (order-free, probed live 2026-11-07)",
         files.len()
     );
     lint_once(&files, &request.tops).map_err(|stderr| {
         eprint_block(&stderr);
-        eprintln!("orbit-contracts: verilator: error: the verilator lint failed");
+        eprintln!("orbit-drives: verilator: error: the verilator lint failed");
         DriveError::Lint { stderr }
     })?;
-    println!("orbit-contracts: verilator: {label}: lint clean");
+    println!("orbit-drives: verilator: {label}: lint clean");
 
     let mut findings = Vec::new();
     for top in &request.tops {
-        println!("orbit-contracts: verilator: {label}: building {top} into {OBJ_DIR}");
+        println!("orbit-drives: verilator: {label}: building {top} into {OBJ_DIR}");
         // The extras ride the drive's last step verbatim: the model run
         // argv on the sim face, the build argv on the build face (there
         // is no run to carry them, and silently dropping a user argument
@@ -265,7 +265,7 @@ pub fn drive(request: &Drive, mode: Mode) -> Result<(), DriveError> {
         };
         build_top(top, &files, build_extra).map_err(|stderr| {
             eprint_block(&stderr);
-            eprintln!("orbit-contracts: verilator: error: the verilator build failed for {top}");
+            eprintln!("orbit-drives: verilator: error: the verilator build failed for {top}");
             DriveError::Build {
                 top: top.clone(),
                 stderr,
@@ -273,20 +273,20 @@ pub fn drive(request: &Drive, mode: Mode) -> Result<(), DriveError> {
         })?;
 
         match mode {
-            Mode::Build => println!("orbit-contracts: verilator: {label}: {top}: built"),
+            Mode::Build => println!("orbit-drives: verilator: {label}: {top}: built"),
             Mode::Sim => {
                 let outcome = run_model(top, &request.extra, label)?;
                 if outcome.clean() {
-                    println!("orbit-contracts: verilator: {label}: {top}: pass");
+                    println!("orbit-drives: verilator: {label}: {top}: pass");
                 } else if outcome.has_face() {
                     println!(
-                        "orbit-contracts: verilator: {label}: {top}: fail (the log carries a \
+                        "orbit-drives: verilator: {label}: {top}: fail (the log carries a \
                          probed verilator failure face)"
                     );
                     findings.push(outcome);
                 } else {
                     println!(
-                        "orbit-contracts: verilator: {label}: {top}: fail (the model exited {} \
+                        "orbit-drives: verilator: {label}: {top}: fail (the model exited {} \
                          without a judged face)",
                         outcome.exit
                     );
@@ -300,7 +300,7 @@ pub fn drive(request: &Drive, mode: Mode) -> Result<(), DriveError> {
         Ok(())
     } else {
         eprintln!(
-            "orbit-contracts: verilator: error: {} run(s) carried a finding",
+            "orbit-drives: verilator: error: {} run(s) carried a finding",
             findings.len()
         );
         Err(DriveError::Findings(findings))
@@ -362,7 +362,7 @@ fn build_top(
 /// signal -- the probed SIGABRT on every `$fatal`/`$error`/`$stop` --
 /// has no exit code, and [`RunOutcome::exit`] records -1.
 fn run_model(top: &str, extra: &[String], label: &str) -> Result<RunOutcome, DriveError> {
-    println!("orbit-contracts: verilator: {label}: running {top}");
+    println!("orbit-drives: verilator: {label}: running {top}");
     let model = format!("./{OBJ_DIR}/V{top}");
     let mut run = Command::new(&model);
     run.args(extra);
@@ -574,7 +574,7 @@ all quiet
             note.contains("json"),
             "the note should name the plan: {note}"
         );
-        assert!(note.starts_with("orbit-contracts: verilator: note:"));
+        assert!(note.starts_with("orbit-drives: verilator: note:"));
     }
 
     #[test]

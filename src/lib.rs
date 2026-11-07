@@ -1,4 +1,4 @@
-//! `orbit-contracts`: the probed failure vocabularies and the honest-exit
+//! `orbit-drives`: the probed failure vocabularies and the honest-exit
 //! target drives for the [orbit](https://github.com/chaseruskin/orbit) HDL
 //! package manager.
 //!

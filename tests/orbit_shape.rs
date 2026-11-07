@@ -30,10 +30,7 @@ fn the_real_orbit_spawn_shape_runs_twice_in_one_output_directory() {
         return;
     }
 
-    let out = std::env::temp_dir().join(format!(
-        "orbit-contracts-orbit-shape-{}",
-        std::process::id()
-    ));
+    let out = std::env::temp_dir().join(format!("orbit-drives-orbit-shape-{}", std::process::id()));
     fs::create_dir_all(&out).unwrap();
 
     // gate <- top <- tb, handed over in the order ghdl cannot forgive: the
@@ -90,7 +87,7 @@ end sim;
     // The exact spawn shape: no `--top`, `$ORBIT_TB_NAME` exported, the
     // extras on the argv bare (orbit strips its own separator), the
     // working directory at the target's output directory.
-    let mut command = Command::new(env!("CARGO_BIN_EXE_orbit-contracts"));
+    let mut command = Command::new(env!("CARGO_BIN_EXE_orbit-drives"));
     command
         .args(["ghdl", "--vcd=waves.vcd"])
         .env("ORBIT_BLUEPRINT", out.join("blueprint.tsv"))

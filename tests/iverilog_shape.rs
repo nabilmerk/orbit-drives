@@ -67,7 +67,7 @@ fn the_real_iverilog_spawn_shape_runs_twice_and_builds_without_a_sim() {
         return;
     }
 
-    let out = std::env::temp_dir().join(format!("orbit-contracts-iv-shape-{}", std::process::id()));
+    let out = std::env::temp_dir().join(format!("orbit-drives-iv-shape-{}", std::process::id()));
     fs::create_dir_all(&out).unwrap();
 
     // gate <- top <- tb, handed over consumer-first: the order a
@@ -98,7 +98,7 @@ endmodule
     // The exact spawn shape: no `--top`, `$ORBIT_TB_NAME` exported, the
     // working directory at the target's output directory.
     let first = spawn_shape(
-        Command::new(env!("CARGO_BIN_EXE_orbit-contracts")).arg("iverilog"),
+        Command::new(env!("CARGO_BIN_EXE_orbit-drives")).arg("iverilog"),
         &out,
         "tb",
     )
@@ -135,7 +135,7 @@ endmodule
     // The second run in the SAME directory: the stale snapshot must not
     // leak into the verdict (every drive compiles a fresh one).
     let second = spawn_shape(
-        Command::new(env!("CARGO_BIN_EXE_orbit-contracts")).arg("iverilog"),
+        Command::new(env!("CARGO_BIN_EXE_orbit-drives")).arg("iverilog"),
         &out,
         "tb",
     )
@@ -151,7 +151,7 @@ endmodule
     // The build face on the same blueprint: the one compile, exit
     // honest, and NO run -- there is no `running` line to find.
     let build = spawn_shape(
-        Command::new(env!("CARGO_BIN_EXE_orbit-contracts")).arg("iverilog-build"),
+        Command::new(env!("CARGO_BIN_EXE_orbit-drives")).arg("iverilog-build"),
         &out,
         "tb",
     )
@@ -186,7 +186,7 @@ fn the_real_iverilog_drive_judges_a_fatal_and_the_error_hole() {
 
     // The $fatal testbench, judged FAIL through the whole drive: the
     // face in the log AND vvp's honest exit-1, either witness enough.
-    let fail = std::env::temp_dir().join(format!("orbit-contracts-iv-fail-{}", std::process::id()));
+    let fail = std::env::temp_dir().join(format!("orbit-drives-iv-fail-{}", std::process::id()));
     fs::create_dir_all(&fail).unwrap();
     write(
         &fail.join("tb_fatal.v"),
@@ -202,7 +202,7 @@ endmodule
     write(&fail.join("blueprint.tsv"), "VLOG\twork\t./tb_fatal.v\n");
 
     let run = spawn_shape(
-        Command::new(env!("CARGO_BIN_EXE_orbit-contracts")).arg("iverilog"),
+        Command::new(env!("CARGO_BIN_EXE_orbit-drives")).arg("iverilog"),
         &fail,
         "tb_fatal",
     )
@@ -231,7 +231,7 @@ endmodule
     // the simulation, and EXITS 0 (probed live on vvp 12.0,
     // 2026-11-07) -- the same hole bare ghdl has. The drive must exit 1
     // on the face alone: this is the judge's reason to exist here.
-    let err = std::env::temp_dir().join(format!("orbit-contracts-iv-err-{}", std::process::id()));
+    let err = std::env::temp_dir().join(format!("orbit-drives-iv-err-{}", std::process::id()));
     fs::create_dir_all(&err).unwrap();
     write(
         &err.join("tb_error.v"),
@@ -249,7 +249,7 @@ endmodule
     write(&err.join("blueprint.tsv"), "VLOG\twork\t./tb_error.v\n");
 
     let run = spawn_shape(
-        Command::new(env!("CARGO_BIN_EXE_orbit-contracts")).arg("iverilog"),
+        Command::new(env!("CARGO_BIN_EXE_orbit-drives")).arg("iverilog"),
         &err,
         "tb_error",
     )
@@ -291,7 +291,7 @@ fn the_real_iverilog_drive_relays_a_compile_failure_and_guards_the_filesets() {
     // stderr relayed verbatim, exit 1 (the drive's honest findings exit,
     // whatever iverilog's own exit was), and no judged run.
     let broken =
-        std::env::temp_dir().join(format!("orbit-contracts-iv-broken-{}", std::process::id()));
+        std::env::temp_dir().join(format!("orbit-drives-iv-broken-{}", std::process::id()));
     fs::create_dir_all(&broken).unwrap();
     write(
         &broken.join("broken.v"),
@@ -304,7 +304,7 @@ endmodule
     write(&broken.join("blueprint.tsv"), "VLOG\twork\t./broken.v\n");
 
     let run = spawn_shape(
-        Command::new(env!("CARGO_BIN_EXE_orbit-contracts")).arg("iverilog"),
+        Command::new(env!("CARGO_BIN_EXE_orbit-drives")).arg("iverilog"),
         &broken,
         "broken",
     )
@@ -336,13 +336,13 @@ endmodule
     // The fileset door: a VHDL blueprint is a loud exit-2, never a
     // silent skip.
     let foreign =
-        std::env::temp_dir().join(format!("orbit-contracts-iv-foreign-{}", std::process::id()));
+        std::env::temp_dir().join(format!("orbit-drives-iv-foreign-{}", std::process::id()));
     fs::create_dir_all(&foreign).unwrap();
     write(&foreign.join("gate.vhd"), "entity gate is\nend gate;\n");
     write(&foreign.join("blueprint.tsv"), "VHDL\twork\t./gate.vhd\n");
 
     let run = spawn_shape(
-        Command::new(env!("CARGO_BIN_EXE_orbit-contracts")).arg("iverilog"),
+        Command::new(env!("CARGO_BIN_EXE_orbit-drives")).arg("iverilog"),
         &foreign,
         "gate",
     )

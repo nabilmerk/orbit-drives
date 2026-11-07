@@ -69,8 +69,7 @@ fn the_real_nvc_spawn_shape_defers_runs_twice_and_builds_without_a_sim() {
         return;
     }
 
-    let out =
-        std::env::temp_dir().join(format!("orbit-contracts-nvc-shape-{}", std::process::id()));
+    let out = std::env::temp_dir().join(format!("orbit-drives-nvc-shape-{}", std::process::id()));
     fs::create_dir_all(&out).unwrap();
 
     // gate <- top <- tb, handed over in the order nvc cannot forgive: the
@@ -104,7 +103,7 @@ end sim;
     // The exact spawn shape: no `--top`, `$ORBIT_TB_NAME` exported, the
     // working directory at the target's output directory.
     let first = spawn_shape(
-        Command::new(env!("CARGO_BIN_EXE_orbit-contracts")).arg("nvc"),
+        Command::new(env!("CARGO_BIN_EXE_orbit-drives")).arg("nvc"),
         &out,
         "tb",
     )
@@ -134,7 +133,7 @@ end sim;
     // the clock clean (and probed honestly: nvc, unlike ghdl, would
     // tolerate the stale library anyway).
     let second = spawn_shape(
-        Command::new(env!("CARGO_BIN_EXE_orbit-contracts")).arg("nvc"),
+        Command::new(env!("CARGO_BIN_EXE_orbit-drives")).arg("nvc"),
         &out,
         "tb",
     )
@@ -150,7 +149,7 @@ end sim;
     // The build face on the same blueprint: analyze + elaborate, exit
     // honest, and NO run -- there is no `running` line to find.
     let build = spawn_shape(
-        Command::new(env!("CARGO_BIN_EXE_orbit-contracts")).arg("nvc-build"),
+        Command::new(env!("CARGO_BIN_EXE_orbit-drives")).arg("nvc-build"),
         &out,
         "tb",
     )
@@ -185,8 +184,7 @@ fn the_real_nvc_drive_judges_a_severity_failure_and_a_severity_error() {
 
     // The severity-failure testbench, judged FAIL through the whole drive:
     // the face in the log AND nvc's honest exit-1, either witness enough.
-    let fail =
-        std::env::temp_dir().join(format!("orbit-contracts-nvc-fail-{}", std::process::id()));
+    let fail = std::env::temp_dir().join(format!("orbit-drives-nvc-fail-{}", std::process::id()));
     fs::create_dir_all(&fail).unwrap();
     write(
         &fail.join("tb_fail.vhd"),
@@ -206,7 +204,7 @@ end sim;
     write(&fail.join("blueprint.tsv"), "VHDL\twork\t./tb_fail.vhd\n");
 
     let run = spawn_shape(
-        Command::new(env!("CARGO_BIN_EXE_orbit-contracts")).arg("nvc"),
+        Command::new(env!("CARGO_BIN_EXE_orbit-drives")).arg("nvc"),
         &fail,
         "tb_fail",
     )
@@ -234,7 +232,7 @@ end sim;
     // simulation but STILL exits 1 (probed live on nvc 1.23.0,
     // 2026-11-07 -- unlike bare ghdl's exit-0 hole, nvc's exit convicts
     // on its own, and the face is the second witness).
-    let err = std::env::temp_dir().join(format!("orbit-contracts-nvc-err-{}", std::process::id()));
+    let err = std::env::temp_dir().join(format!("orbit-drives-nvc-err-{}", std::process::id()));
     fs::create_dir_all(&err).unwrap();
     write(
         &err.join("tb_err.vhd"),
@@ -255,7 +253,7 @@ end sim;
     write(&err.join("blueprint.tsv"), "VHDL\twork\t./tb_err.vhd\n");
 
     let run = spawn_shape(
-        Command::new(env!("CARGO_BIN_EXE_orbit-contracts")).arg("nvc"),
+        Command::new(env!("CARGO_BIN_EXE_orbit-drives")).arg("nvc"),
         &err,
         "tb_err",
     )

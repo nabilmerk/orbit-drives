@@ -1,9 +1,9 @@
-# The orbit-contracts target fragment. Include it into an orbit project
+# The orbit-drives target fragment. Include it into an orbit project
 # configuration to add the ghdl and nvc targets:
 #
-#   orbit config --push include=/path/to/orbit-contracts/config.toml
+#   orbit config --push include=/path/to/orbit-drives/config.toml
 #
-# The `orbit-contracts` binary must be on PATH (`cargo install --path .`).
+# The `orbit-drives` binary must be on PATH (`cargo install --path .`).
 # Run them through orbit:
 #
 #   orbit test --target ghdl -- -gW=4 --vcd=waves.vcd
@@ -28,39 +28,39 @@
 [[target]]
 name = "ghdl"
 description = "VHDL testbenches through ghdl: blueprint-order analysis with the deferral loop, each run gated on ghdl's probed failure vocabulary and the honest exit"
-command = ["orbit-contracts", "ghdl"]
+command = ["orbit-drives", "ghdl"]
 
 [[target]]
 name = "ghdl-build"
 description = "VHDL builds through ghdl: blueprint-order analysis with the deferral loop, then elaboration per top -- exit honest, no simulation, nothing judged"
-command = ["orbit-contracts", "ghdl-build"]
+command = ["orbit-drives", "ghdl-build"]
 
 [[target]]
 name = "nvc"
 description = "VHDL testbenches through nvc: blueprint-order analysis with the deferral loop, each run gated on nvc's probed failure vocabulary and the honest exit"
-command = ["orbit-contracts", "nvc"]
+command = ["orbit-drives", "nvc"]
 
 [[target]]
 name = "nvc-build"
 description = "VHDL builds through nvc: blueprint-order analysis with the deferral loop, then elaboration per top -- exit honest, no simulation, nothing judged"
-command = ["orbit-contracts", "nvc-build"]
+command = ["orbit-drives", "nvc-build"]
 
 [[target]]
 name = "iverilog"
 description = "Verilog/SV testbenches through Icarus Verilog: one order-free compile into a snapshot (-g2012, every --top a -s root), then one judged vvp run -- vvp exits 0 on a $error call, so the probed vocabulary is the load-bearing gate"
-command = ["orbit-contracts", "iverilog"]
+command = ["orbit-drives", "iverilog"]
 
 [[target]]
 name = "iverilog-build"
 description = "Verilog/SV builds through Icarus Verilog: the one order-free compile into a snapshot, exit honest -- no simulation, nothing judged; every --top a -s root, validated by iverilog at compile time"
-command = ["orbit-contracts", "iverilog-build"]
+command = ["orbit-drives", "iverilog-build"]
 
 [[target]]
 name = "verilator"
 description = "Verilog/SV testbenches through verilator: one lint (--timing; every --top a --top-module, of which verilator honors only the last), one model build per top (--binary --build into obj_dir; each build validates its top), each model run gated on verilator's probed failure vocabulary and the model's exit -- every probed model failure dies by SIGABRT"
-command = ["orbit-contracts", "verilator"]
+command = ["orbit-drives", "verilator"]
 
 [[target]]
 name = "verilator-build"
 description = "Verilog/SV builds through verilator: the lint and the per-top model builds only, exit honest -- no simulation, nothing judged; the lint honors only the last --top-module (an unknown non-last top lints clean), and the lint and build exits are honest (exit 1 on a lint error, an unknown top's own build, or an enabled warning)"
-command = ["orbit-contracts", "verilator-build"]
+command = ["orbit-drives", "verilator-build"]

@@ -1,7 +1,7 @@
-//! The `orbit-contracts` binary: argv in, honest exit out.
+//! The `orbit-drives` binary: argv in, honest exit out.
 //!
 //! ```text
-//! orbit-contracts <SUBCOMMAND> --blueprint <path> --top <name> [extra tool args...]
+//! orbit-drives <SUBCOMMAND> --blueprint <path> --top <name> [extra tool args...]
 //! ```
 //!
 //! Orbit spawns the target with the working directory set to the target's
@@ -20,13 +20,13 @@ use std::env;
 use std::path::PathBuf;
 use std::process::ExitCode;
 
-use orbit_contracts::{blueprint, ghdl, iverilog, nvc, verilator};
+use orbit_drives::{blueprint, ghdl, iverilog, nvc, verilator};
 
 const USAGE: &str = "\
-orbit-contracts: the probed failure vocabularies and the honest-exit targets for orbit
+orbit-drives: the probed failure vocabularies and the honest-exit targets for orbit
 
 USAGE:
-    orbit-contracts <SUBCOMMAND> [SUBCOMMAND OPTIONS] [EXTRA TOOL ARGS...]
+    orbit-drives <SUBCOMMAND> [SUBCOMMAND OPTIONS] [EXTRA TOOL ARGS...]
 
 SUBCOMMANDS:
     ghdl         analyze the blueprint's VHDL in blueprint order, elaborate
@@ -246,8 +246,8 @@ fn main() -> ExitCode {
         }
         Ok(Cli::Run(request)) => drive_request(request),
         Err(e) => {
-            eprintln!("orbit-contracts: error: {}", e.0);
-            eprintln!("try `orbit-contracts --help`");
+            eprintln!("orbit-drives: error: {}", e.0);
+            eprintln!("try `orbit-drives --help`");
             ExitCode::from(2)
         }
     }
@@ -277,7 +277,7 @@ fn drive_request(request: Request) -> ExitCode {
         .blueprint
         .or_else(|| env::var_os("ORBIT_BLUEPRINT").map(PathBuf::from));
     let Some(blueprint) = blueprint else {
-        eprintln!("orbit-contracts: error: no blueprint to read: pass --blueprint <path> or set ORBIT_BLUEPRINT");
+        eprintln!("orbit-drives: error: no blueprint to read: pass --blueprint <path> or set ORBIT_BLUEPRINT");
         return ExitCode::from(2);
     };
     let defaulted = request.tops.is_empty();
@@ -285,14 +285,14 @@ fn drive_request(request: Request) -> ExitCode {
     let tops = resolve_tops(request.tops, tb_name.as_deref());
     if tops.is_empty() {
         eprintln!(
-            "orbit-contracts: error: no top to drive: pass --top <name>, or come through \
+            "orbit-drives: error: no top to drive: pass --top <name>, or come through \
              orbit with $ORBIT_TB_NAME set (`orbit test --target ghdl` exports it)"
         );
         return ExitCode::from(2);
     }
     if defaulted {
         eprintln!(
-            "orbit-contracts: note: no --top given; taking the testbench $ORBIT_TB_NAME: {}",
+            "orbit-drives: note: no --top given; taking the testbench $ORBIT_TB_NAME: {}",
             tops[0]
         );
     }

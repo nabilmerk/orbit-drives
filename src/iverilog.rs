@@ -235,7 +235,7 @@ pub fn drive(request: &Drive, mode: Mode) -> Result<(), DriveError> {
     if let Err(e) = fs::remove_file(SNAPSHOT) {
         if e.kind() != std::io::ErrorKind::NotFound {
             let message = format!("cannot wipe the stale snapshot {SNAPSHOT}: {e}");
-            eprintln!("orbit-contracts: iverilog: error: {message}");
+            eprintln!("orbit-drives: iverilog: error: {message}");
             return Err(DriveError::Library(message));
         }
     }
@@ -252,21 +252,21 @@ pub fn drive(request: &Drive, mode: Mode) -> Result<(), DriveError> {
             path: request.blueprint.clone(),
             source,
         };
-        eprintln!("orbit-contracts: iverilog: error: {e}");
+        eprintln!("orbit-drives: iverilog: error: {e}");
         DriveError::Blueprint(e)
     })?;
     let entries = parse_blueprint(&text).map_err(|e| {
         let e = BlueprintError::Parse(e);
-        eprintln!("orbit-contracts: iverilog: error: {e}");
+        eprintln!("orbit-drives: iverilog: error: {e}");
         DriveError::Blueprint(e)
     })?;
     let files = verilog_only(&entries).map_err(|e| {
-        eprintln!("orbit-contracts: iverilog: error: {e}");
+        eprintln!("orbit-drives: iverilog: error: {e}");
         DriveError::NotCarried(e)
     })?;
 
     println!(
-        "orbit-contracts: iverilog: {label}: compiling {} Verilog file(s) into one snapshot \
+        "orbit-drives: iverilog: {label}: compiling {} Verilog file(s) into one snapshot \
          (the compile is order-free, probed live 2026-11-07)",
         files.len()
     );
@@ -282,31 +282,31 @@ pub fn drive(request: &Drive, mode: Mode) -> Result<(), DriveError> {
     };
     compile_once(&files, &request.tops, build_extra).map_err(|stderr| {
         eprint_block(&stderr);
-        eprintln!("orbit-contracts: iverilog: error: the iverilog compile failed");
+        eprintln!("orbit-drives: iverilog: error: the iverilog compile failed");
         DriveError::Compile { stderr }
     })?;
-    println!("orbit-contracts: iverilog: {label}: {SNAPSHOT} compiled");
+    println!("orbit-drives: iverilog: {label}: {SNAPSHOT} compiled");
 
     if mode == Mode::Sim {
         let roots = request.tops.join("+");
         let outcome = run_snapshot(&roots, &request.extra, label)?;
         if outcome.clean() {
-            println!("orbit-contracts: iverilog: {label}: {roots}: pass");
+            println!("orbit-drives: iverilog: {label}: {roots}: pass");
             return Ok(());
         }
         if outcome.has_face() {
             println!(
-                "orbit-contracts: iverilog: {label}: {roots}: fail (the log carries a probed \
+                "orbit-drives: iverilog: {label}: {roots}: fail (the log carries a probed \
                  iverilog failure face)"
             );
         } else {
             println!(
-                "orbit-contracts: iverilog: {label}: {roots}: fail (vvp exited {} without a \
+                "orbit-drives: iverilog: {label}: {roots}: fail (vvp exited {} without a \
                  judged face)",
                 outcome.exit
             );
         }
-        eprintln!("orbit-contracts: iverilog: error: 1 run(s) carried a finding");
+        eprintln!("orbit-drives: iverilog: error: 1 run(s) carried a finding");
         return Err(DriveError::Findings(vec![outcome]));
     }
 
@@ -347,7 +347,7 @@ fn compile_once(
 /// The probed failure faces (`FATAL:`, `ERROR:`) land on stdout; the log
 /// joins both streams, so it reads either way.
 fn run_snapshot(roots: &str, extra: &[String], label: &str) -> Result<RunOutcome, DriveError> {
-    println!("orbit-contracts: iverilog: {label}: running {roots}");
+    println!("orbit-drives: iverilog: {label}: running {roots}");
     let mut run = Command::new(VVP_BIN);
     run.arg(SNAPSHOT).args(extra);
     let output = capture(VVP_BIN, &mut run).map_err(DriveError::Spawn)?;
@@ -514,7 +514,7 @@ tb_warn.v:6: $finish called at 1 (1s)
             note.contains("json"),
             "the note should name the plan: {note}"
         );
-        assert!(note.starts_with("orbit-contracts: iverilog: note:"));
+        assert!(note.starts_with("orbit-drives: iverilog: note:"));
     }
 
     #[test]

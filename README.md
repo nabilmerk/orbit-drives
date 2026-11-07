@@ -1,19 +1,23 @@
-# orbit-contracts
+# orbit-drives
 
-The probed failure vocabularies and the honest-exit target drives for the
-[orbit](https://github.com/chaseruskin/orbit) HDL package manager.
+orbit-drives removes the scripting from your orbit targets: orbit plans
+your dependencies into a blueprint — the drives execute it, tool by tool,
+each carrying its probed failure vocabulary and an honest exit. You write
+neither the plan nor the scripts.
 
-Orbit's only contract with a target is the exit code: nonzero fails the
-build. That contract only means something if the target's exit is honest --
-so `orbit-contracts` never trusts a single witness. Each drive captures the
-tool's log and gates it on the tool's **probed failure vocabulary** (faces
-copied from live runs, never invented) **and** on the tool's exit code:
-findings = a face present OR a nonzero exit. Either witness convicts. The
-judge exists because the exits lie: bare ghdl exits 0 on a violated
-`severity error` check -- it prints the face and continues -- and the exit
-exists as a witness because a killed simulation can leave no face at all.
+The honest-exit target drives for the
+[orbit](https://github.com/chaseruskin/orbit) HDL package manager. Each
+drive captures the tool's log and gates it on the tool's **probed failure
+vocabulary** (faces copied from live runs, never invented) **and** on the
+tool's exit code: findings = a face present OR a nonzero exit. Either
+witness convicts. The judge exists because the exits lie: bare ghdl exits
+0 on a violated `severity error` check -- it prints the face and
+continues -- and the exit exists as a witness because a killed simulation
+can leave no face at all.
 
 ## Install
+
+The drives ship as one binary:
 
 ```sh
 cargo install --path .
@@ -26,7 +30,7 @@ No dependencies beyond the Rust standard library.
 Include the shipped target fragment into an orbit project configuration:
 
 ```sh
-orbit config --push include=/path/to/orbit-contracts/config.toml
+orbit config --push include=/path/to/orbit-drives/config.toml
 ```
 
 Then run the target:
@@ -45,8 +49,11 @@ verbatim.
 
 ## Usage
 
+One subcommand per drive -- the subcommands are what orbit's targets
+spawn:
+
 ```
-orbit-contracts <SUBCOMMAND> --blueprint <path> --top <name> [extra tool args...]
+orbit-drives <SUBCOMMAND> --blueprint <path> --top <name> [extra tool args...]
 ```
 
 Subcommands (one per orbit target entry):

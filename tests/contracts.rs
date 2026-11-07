@@ -7,7 +7,7 @@
 
 use std::str::FromStr;
 
-use orbit_contracts::contracts::{self, Tool, UnknownTool};
+use orbit_drives::contracts::{self, Tool, UnknownTool};
 
 // a real ghdl failure log, probed live on ghdl 6.0.0 (`ghdl -r --std=08`):
 // a testbench asserting `severity failure` at 1 ns exits 1 and prints these

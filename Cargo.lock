@@ -3,5 +3,5 @@
 version = 4
 
 [[package]]
-name = "orbit-contracts"
+name = "orbit-drives"
 version = "0.1.0"

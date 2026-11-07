@@ -1,8 +1,8 @@
 [package]
-name = "orbit-contracts"
+name = "orbit-drives"
 version = "0.1.0"
 edition = "2021"
 rust-version = "1.65"
 description = "Probed failure vocabularies and honest-exit targets for the orbit HDL package manager"
 license = "MIT OR Apache-2.0"
-repository = "https://github.com/chaseruskin/orbit-contracts"
+repository = "https://github.com/chaseruskin/orbit-drives"

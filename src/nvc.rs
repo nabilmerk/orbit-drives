@@ -198,7 +198,7 @@ pub fn drive(request: &Drive, mode: Mode) -> Result<(), DriveError> {
     if let Err(e) = fs::remove_dir_all(WORK_LIBRARY_DIR) {
         if e.kind() != std::io::ErrorKind::NotFound {
             let message = format!("cannot wipe the stale work library {WORK_LIBRARY_DIR}/: {e}");
-            eprintln!("orbit-contracts: nvc: error: {message}");
+            eprintln!("orbit-drives: nvc: error: {message}");
             return Err(DriveError::Library(message));
         }
     }
@@ -212,38 +212,38 @@ pub fn drive(request: &Drive, mode: Mode) -> Result<(), DriveError> {
             path: request.blueprint.clone(),
             source,
         };
-        eprintln!("orbit-contracts: nvc: error: {e}");
+        eprintln!("orbit-drives: nvc: error: {e}");
         DriveError::Blueprint(e)
     })?;
     let entries = parse_blueprint(&text).map_err(|e| {
         let e = BlueprintError::Parse(e);
-        eprintln!("orbit-contracts: nvc: error: {e}");
+        eprintln!("orbit-drives: nvc: error: {e}");
         DriveError::Blueprint(e)
     })?;
     let files = vhdl_only(&entries).map_err(|e| {
-        eprintln!("orbit-contracts: nvc: error: {e}");
+        eprintln!("orbit-drives: nvc: error: {e}");
         DriveError::NotCarried(e)
     })?;
 
     println!(
-        "orbit-contracts: nvc: {label}: analyzing {} VHDL file(s) in blueprint order",
+        "orbit-drives: nvc: {label}: analyzing {} VHDL file(s) in blueprint order",
         files.len()
     );
     let report = ghdl::analyze_with_deferral(&files, analyze_once);
     println!(
-        "orbit-contracts: nvc: {label}: {} file(s) analyzed in {} pass(es)",
+        "orbit-drives: nvc: {label}: {} file(s) analyzed in {} pass(es)",
         report.analyzed.len(),
         report.passes
     );
     if !report.residual.is_empty() {
         eprintln!(
-            "orbit-contracts: nvc: error: {} file(s) never analyzed after {} pass(es)",
+            "orbit-drives: nvc: error: {} file(s) never analyzed after {} pass(es)",
             report.residual.len(),
             report.passes
         );
         for residual in &report.residual {
             eprintln!(
-                "orbit-contracts: nvc: error: analyze failed: {}",
+                "orbit-drives: nvc: error: analyze failed: {}",
                 residual.path.display()
             );
             eprint_block(&residual.stderr);
@@ -253,7 +253,7 @@ pub fn drive(request: &Drive, mode: Mode) -> Result<(), DriveError> {
 
     let mut findings = Vec::new();
     for top in &request.tops {
-        println!("orbit-contracts: nvc: {label}: elaborating {top}");
+        println!("orbit-drives: nvc: {label}: elaborating {top}");
         let mut elaborate = Command::new(NVC_BIN);
         // nvc's argv is option-first: the global `--std` leads, the
         // command follows (`nvc --std=2008 -e <top>`); after the command
@@ -273,7 +273,7 @@ pub fn drive(request: &Drive, mode: Mode) -> Result<(), DriveError> {
         if !output.status.success() {
             let stderr = lossy(&output.stderr);
             eprint_block(&stderr);
-            eprintln!("orbit-contracts: nvc: error: nvc -e failed for {top}");
+            eprintln!("orbit-drives: nvc: error: nvc -e failed for {top}");
             return Err(DriveError::Elaborate {
                 top: top.clone(),
                 stderr,
@@ -281,19 +281,19 @@ pub fn drive(request: &Drive, mode: Mode) -> Result<(), DriveError> {
         }
 
         match mode {
-            Mode::Build => println!("orbit-contracts: nvc: {label}: {top}: elaborated"),
+            Mode::Build => println!("orbit-drives: nvc: {label}: {top}: elaborated"),
             Mode::Sim => {
                 let outcome = run_top(top, &request.extra, label)?;
                 if outcome.clean() {
-                    println!("orbit-contracts: nvc: {label}: {top}: pass");
+                    println!("orbit-drives: nvc: {label}: {top}: pass");
                 } else if outcome.has_face() {
                     println!(
-                        "orbit-contracts: nvc: {label}: {top}: fail (the log carries a probed nvc failure face)"
+                        "orbit-drives: nvc: {label}: {top}: fail (the log carries a probed nvc failure face)"
                     );
                     findings.push(outcome);
                 } else {
                     println!(
-                        "orbit-contracts: nvc: {label}: {top}: fail (nvc exited {} without a judged face)",
+                        "orbit-drives: nvc: {label}: {top}: fail (nvc exited {} without a judged face)",
                         outcome.exit
                     );
                     findings.push(outcome);
@@ -306,7 +306,7 @@ pub fn drive(request: &Drive, mode: Mode) -> Result<(), DriveError> {
         Ok(())
     } else {
         eprintln!(
-            "orbit-contracts: nvc: error: {} run(s) carried a finding",
+            "orbit-drives: nvc: error: {} run(s) carried a finding",
             findings.len()
         );
         Err(DriveError::Findings(findings))
@@ -319,7 +319,7 @@ pub fn drive(request: &Drive, mode: Mode) -> Result<(), DriveError> {
 /// pinned for nvc because none is needed -- nvc's run exit probed honest
 /// on every failure face, and the judge gates the log regardless.
 fn run_top(top: &str, extra: &[String], label: &str) -> Result<RunOutcome, DriveError> {
-    println!("orbit-contracts: nvc: {label}: running {top}");
+    println!("orbit-drives: nvc: {label}: running {top}");
     let mut run = Command::new(NVC_BIN);
     run.arg(STD).arg("-r").arg(top).args(extra);
     let output = capture(NVC_BIN, &mut run).map_err(DriveError::Spawn)?;
@@ -490,7 +490,7 @@ mod tests {
             note.contains("json"),
             "the note should name the plan: {note}"
         );
-        assert!(note.starts_with("orbit-contracts: nvc: note:"));
+        assert!(note.starts_with("orbit-drives: nvc: note:"));
     }
 
     #[test]

@@ -165,7 +165,7 @@ pub struct Drive {
 pub(crate) fn plan_note(tool: &str, plan: Option<&str>) -> Option<String> {
     match plan {
         Some(plan) if plan != "tsv" => Some(format!(
-            "orbit-contracts: {tool}: note: $ORBIT_BLUEPRINT_PLAN is {plan:?}; the drive \
+            "orbit-drives: {tool}: note: $ORBIT_BLUEPRINT_PLAN is {plan:?}; the drive \
              carries the TSV plan only, reading the blueprint as TSV lines"
         )),
         _ => None,
