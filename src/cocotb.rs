@@ -77,7 +77,9 @@ pub const DRIVER_PREFIX: &str = "orbit-cocotb";
 /// missing cocotb (or the retired module layout of a 1.x install) is a
 /// loud usage error instead of a driver-script failure. Probed: cocotb
 /// 2.x ships the runner in the separate `cocotb_tools` distribution
-/// package; a 1.x install answers this import with a nonzero exit.
+/// package; a 1.x install answers this import with a nonzero exit --
+/// and a nonzero exit is checked, its stderr relayed, the same loud
+/// usage error a spawn failure is.
 pub const IDENTITY_PROBE: &str = "import cocotb, cocotb_tools.runner";
 
 /// The record of one top's cocotb run: what the runner exited and what
@@ -159,7 +161,12 @@ pub enum DriveError {
     /// usage-class, exit 2.
     NotCarried(NotCarried),
     /// python (or the cocotb runner package) could not be spawned at
-    /// all: usage-class, exit 2.
+    /// all, or the identity probe answered with a nonzero exit (a
+    /// broken `cocotb_tools` on `PYTHONPATH`, or a 1.x install -- the
+    /// runner lives in `cocotb_tools` since 2.0): usage-class, exit 2.
+    /// The probe's stderr rides the message, the loud face the user
+    /// needs (the README promise: a loud usage error, never a
+    /// mid-drive failure).
     Spawn(String),
     /// The stale build directory or driver script could not be reset:
     /// usage-class, exit 2.
@@ -327,11 +334,29 @@ pub fn runner_script(top: &str, module_stem: &str, files: &[PathBuf], extra: &[S
 pub fn drive(request: &Drive) -> Result<(), DriveError> {
     // python + the cocotb runner must be spawnable before anything else,
     // so a missing cocotb is a loud usage error instead of a
-    // driver-script failure (a 1.x install answers the same probe with
-    // a nonzero exit: the runner lives in cocotb_tools since 2.0).
+    // driver-script failure. A SPAWN failure maps through `capture`;
+    // a nonzero probe exit is the same usage class -- the probe's own
+    // stderr rides the message (a broken `cocotb_tools` on PYTHONPATH
+    // or a 1.x install answers the import with a traceback worth
+    // reading), and the drive dies here, before any runner script
+    // write.
     let mut probe = Command::new(PYTHON_BIN);
     probe.arg("-c").arg(IDENTITY_PROBE);
-    capture(PYTHON_BIN, &mut probe).map_err(DriveError::Spawn)?;
+    let probe_output = capture(PYTHON_BIN, &mut probe).map_err(DriveError::Spawn)?;
+    if !probe_output.status.success() {
+        let stderr = lossy(&probe_output.stderr);
+        let code = probe_output
+            .status
+            .code()
+            .map(|code| code.to_string())
+            .unwrap_or_else(|| "a signal".to_string());
+        let message = format!(
+            "the cocotb identity probe ({IDENTITY_PROBE}) exited {code}: {}",
+            stderr.trim_end()
+        );
+        eprintln!("orbit-drives: cocotb: error: {message}");
+        return Err(DriveError::Spawn(message));
+    }
 
     // The test module is the drive's own requirement: the CLI gate
     // fires first (exit 2 naming the flag); this door keeps the drive

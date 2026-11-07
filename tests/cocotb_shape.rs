@@ -14,6 +14,7 @@
 //! coroutine, plus its assert-fail variant.
 
 use std::fs;
+use std::os::unix::fs::PermissionsExt;
 use std::path::{Path, PathBuf};
 use std::process::Command;
 
@@ -268,6 +269,64 @@ fn the_real_cocotb_drive_requires_the_test_module_before_any_drive() {
         String::from_utf8_lossy(&wrong.stderr).contains("--test-module is the cocotb face's flag"),
         "the rejection should name the flag's face:\n{}",
         String::from_utf8_lossy(&wrong.stderr)
+    );
+    fs::remove_dir_all(&out).ok();
+}
+
+#[test]
+fn a_broken_cocotb_install_is_a_loud_usage_error_before_any_runner_script() {
+    // The identity probe's exit is a witness (the README promise: a
+    // broken cocotb_tools or a 1.x install answers the probe with a
+    // nonzero exit -- a loud usage error, never a mid-drive failure).
+    // A fake python3 shim exiting 1 stands in for the broken install;
+    // the drive must die at the probe, exit 2, relaying the probe's
+    // stderr, BEFORE the runner script is written. Hermetic: no real
+    // cocotb needed.
+    let out = std::env::temp_dir().join(format!("orbit-drives-coco-probe-{}", std::process::id()));
+    fs::create_dir_all(&out).unwrap();
+    write(&out.join("blueprint.tsv"), "VHDL\twork\t./counter.vhd\n");
+
+    let shim_dir = out.join("shim-bin");
+    fs::create_dir_all(&shim_dir).unwrap();
+    let shim = shim_dir.join("python3");
+    fs::write(
+        &shim,
+        "#!/bin/sh\necho 'broken cocotb_tools on PYTHONPATH' >&2\nexit 1\n",
+    )
+    .unwrap();
+    fs::set_permissions(&shim, fs::Permissions::from_mode(0o755)).unwrap();
+
+    let probe_fail = Command::new(env!("CARGO_BIN_EXE_orbit-drives"))
+        .arg("cocotb")
+        .arg("--test-module")
+        .arg("test_counter.py")
+        .env("ORBIT_BLUEPRINT", out.join("blueprint.tsv"))
+        .env("ORBIT_TB_NAME", "counter")
+        .env("PATH", &shim_dir)
+        .env_remove("ORBIT_BLUEPRINT_PLAN")
+        .current_dir(&out)
+        .output()
+        .unwrap();
+    assert_eq!(
+        probe_fail.status.code(),
+        Some(2),
+        "a nonzero identity probe must be the loud usage error, never a mid-drive \
+         failure:\n{}{}",
+        String::from_utf8_lossy(&probe_fail.stdout),
+        String::from_utf8_lossy(&probe_fail.stderr)
+    );
+    let stderr = String::from_utf8_lossy(&probe_fail.stderr);
+    assert!(
+        stderr.contains("cocotb identity probe"),
+        "the usage error should name the identity probe:\n{stderr}"
+    );
+    assert!(
+        stderr.contains("broken cocotb_tools on PYTHONPATH"),
+        "the usage error should relay the probe's stderr:\n{stderr}"
+    );
+    assert!(
+        !out.join("orbit-cocotb-counter.py").exists(),
+        "the drive must die at the probe, before any runner script write"
     );
     fs::remove_dir_all(&out).ok();
 }
