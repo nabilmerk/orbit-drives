@@ -237,8 +237,8 @@ pub const VERILATOR_VOCABULARY: &[&str] = &[
 pub const YOSYS_VOCABULARY: &[&str] = &["ERROR:"];
 
 /// Vivado's failure faces, probed live on Vivado 2025.2.1 (2026-11-07,
-/// `xsim <snapshot> -R` after `xvhdl`/`xelab`, plus the hdlm project's
-/// 2025.2.1 probe record): the RUN faces lead their lines with the bare
+/// `xsim <snapshot> -R` after `xvhdl`/`xelab`, plus a prior 2025.2.1
+/// probe record): the RUN faces lead their lines with the bare
 /// severity marker -- `Failure: the design is wrong` under a violated
 /// `assert ... severity failure`, `Error: check failed` under a violated
 /// `severity error` -- and xsim EXITS 0 on both (probed live: the run
@@ -259,7 +259,7 @@ pub const YOSYS_VOCABULARY: &[&str] = &["ERROR:"];
 /// compile failure), so the compile steps gate on the exit and are never
 /// judged -- an uppercase face could not be judged by these mixed-case
 /// markers anyway, and that is deliberate. `Fatal:` rides the vocabulary
-/// per the hdlm probe record (the xsim kernel's fatal face); it never
+/// per a prior probe record (the xsim kernel's fatal face); it never
 /// fired in this pass's own probes.
 pub const VIVADO_VOCABULARY: &[&str] = &["Fatal:", "Error:", "Failure:"];
 

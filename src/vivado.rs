@@ -22,8 +22,7 @@
 //! drive, error or clean (probed) -- which the `Vivado` vocabulary
 //! deliberately does not carry (below). No std flag is pinned: the
 //! tool's default compiles GRLIB-scale designs green, and `--2008`
-//! breaks them (the `10-3083` homograph walls, probed in the hdlm
-//! project).
+//! breaks them (the `10-3083` homograph walls, probed live).
 //!
 //! The judge -- not xsim's exit code -- is the sim face's load-bearing
 //! gate: xsim exits 0 on BOTH probed runtime failures (a violated
@@ -59,9 +58,9 @@
 //! leg derived from the resolved vivado install) -- and the scoping is
 //! the spawn only: `Command::env` never touches this process, because a
 //! process-wide LD_LIBRARY_PATH poisons other tools' backends (the ghdl
-//! LLVM backend fails on Vivado's bundled libstdc++, probed in the hdlm
-//! project). The vivado binary resolves from the `VIVADO_BIN` env hook
-//! (the hdlm precedent) and the stage binaries ride beside it as
+//! LLVM backend fails on Vivado's bundled libstdc++, probed). The
+//! vivado binary resolves from the `VIVADO_BIN` env hook and the stage
+//! binaries ride beside it as
 //! siblings of the resolved path; a bare PATH name falls back to the
 //! PATH lookup for the whole family (a settings64-sourced shell).
 
@@ -76,8 +75,8 @@ use crate::contracts::{self, Tool};
 use crate::ghdl::analyze_with_deferral;
 use crate::proc::{capture, eprint_block, join_log, lossy, print_block};
 
-/// The env hook naming the vivado binary (the hdlm precedent: the stage
-/// binaries run on this alone when the recipe legs are derived).
+/// The env hook naming the vivado binary. The stage binaries run on
+/// this alone when the recipe legs are derived.
 pub const VIVADO_BIN_ENV: &str = "VIVADO_BIN";
 
 /// The vivado binary's bare name, the PATH fallback when `VIVADO_BIN` is
@@ -518,7 +517,7 @@ pub fn drive(request: &Drive, mode: Mode) -> Result<(), DriveError> {
     // probed -- the deferral loop), then xvlog (order-free, one
     // invocation, probed). Both gate on the honest exit; no std flag is
     // pinned (the tool default compiles GRLIB-scale designs green;
-    // `--2008` breaks them, probed in the hdlm project).
+    // `--2008` breaks them, probed live).
     compile_vhdl(&vhdl, &xvhdl, &vivado)?;
     compile_verilog(&verilog, &xvlog, &vivado)?;
     println!(

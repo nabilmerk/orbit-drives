@@ -336,8 +336,8 @@ richest probed process in this crate. The shapes the probes wrote down:
 
 Every vivado-family spawn needs the recipe env, and the drive sets all
 three legs on every spawn itself (`Command::env`, scoped to the spawn --
-a process-wide `LD_LIBRARY_PATH` poisons other tools' backends, probed in
-the hdlm project):
+a process-wide `LD_LIBRARY_PATH` poisons other tools' backends, probed):
+the ghdl LLVM backend fails on Vivado's bundled libstdc++.
 
 - **`LC_ALL`** -- the launcher aborts without a UTF-8 locale it can name.
   The environment's own `LC_ALL` wins; the probed `en_US.UTF-8` default
@@ -374,7 +374,7 @@ spawnability probe.
   clean, probed live), so the Verilog files compile in ONE invocation.
 - **No std flag is pinned.** The tool default compiles GRLIB-scale
   designs green; `--2008` breaks them (the `10-3083` homograph walls,
-  probed in the hdlm project). The default is the design, not an
+  probed live). The default is the design, not an
   oversight.
 - **The compile gates on the exit and is never judged.** Every probed
   compile failure exits 1, and the faces are UPPERCASE `ERROR:` on
