@@ -33,6 +33,20 @@ pub const STD: &str = "--std=08";
 /// land in the log either way.
 pub const ASSERT_LEVEL: &str = "--assert-level=error";
 
+/// The work library file ghdl writes into the working directory for
+/// `--std=08` (ghdl names it after the standard: `-obj08`). It is ghdl's
+/// clock.
+///
+/// Orbit's output directory persists across runs, and a stale library
+/// turns this drive's own re-analysis against itself: in the
+/// consumer-first order the deferral loop exists for, run 2 re-analyzes
+/// the consumer BEFORE its provider -- the provider's re-analysis then
+/// obsoletes the consumer's units, and `ghdl -e` refuses the unchanged
+/// design (`error: architecture "rtl" of "top" is obsoleted by entity
+/// "gate"`, probed live on ghdl 6.0.0, 2026-11-07). Correctness before
+/// incrementality in v1: every drive starts from an empty library.
+pub const WORK_LIBRARY_FILE: &str = "work-obj08.cf";
+
 /// One entry of the blueprint: a fileset, a library, and the file's path.
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub struct Entry {
@@ -286,6 +300,8 @@ pub enum DriveError {
     NotCarried(NotCarried),
     /// ghdl could not be spawned at all: usage-class, exit 2.
     Spawn(String),
+    /// The stale work library could not be wiped: usage-class, exit 2.
+    Library(String),
     /// Files never analyzed after the deferral loop exhausted: findings,
     /// exit 1.
     Analyze(AnalyzeReport),
@@ -305,7 +321,10 @@ impl DriveError {
     /// drive never got past, 1 for findings ghdl or the judge reported.
     pub fn exit_code(&self) -> u8 {
         match self {
-            DriveError::Blueprint(_) | DriveError::NotCarried(_) | DriveError::Spawn(_) => 2,
+            DriveError::Blueprint(_)
+            | DriveError::NotCarried(_)
+            | DriveError::Spawn(_)
+            | DriveError::Library(_) => 2,
             DriveError::Analyze(_) | DriveError::Elaborate { .. } | DriveError::Findings(_) => 1,
         }
     }
@@ -352,7 +371,18 @@ fn plan_note(plan: Option<&str>) -> Option<String> {
 pub fn drive(request: &Drive) -> Result<(), DriveError> {
     // ghdl must be spawnable before anything else, so a missing binary is
     // a loud usage error instead of a deferral-loop residual.
-    capture(Command::new(GHDL_BIN).arg("--version"))?;
+    capture(Command::new(GHDL_BIN).arg("--version")).map_err(DriveError::Spawn)?;
+
+    // Run-scoped library state: see `WORK_LIBRARY_FILE`. Every drive
+    // starts from an empty library, so a second run in the same
+    // persistent output directory cannot obsolete its own design.
+    if let Err(e) = fs::remove_file(WORK_LIBRARY_FILE) {
+        if e.kind() != std::io::ErrorKind::NotFound {
+            let message = format!("cannot wipe the stale work library {WORK_LIBRARY_FILE}: {e}");
+            eprintln!("orbit-contracts: ghdl: error: {message}");
+            return Err(DriveError::Library(message));
+        }
+    }
 
     if let Some(note) = plan_note(std::env::var("ORBIT_BLUEPRINT_PLAN").ok().as_deref()) {
         eprintln!("{note}");
@@ -407,7 +437,7 @@ pub fn drive(request: &Drive) -> Result<(), DriveError> {
         println!("orbit-contracts: ghdl: elaborating {top}");
         let mut elaborate = Command::new(GHDL_BIN);
         elaborate.args(["-e", STD]).arg(top);
-        let output = capture(&mut elaborate)?;
+        let output = capture(&mut elaborate).map_err(DriveError::Spawn)?;
         if !output.status.success() {
             let stderr = lossy(&output.stderr);
             eprint_block(&stderr);
@@ -426,7 +456,7 @@ pub fn drive(request: &Drive) -> Result<(), DriveError> {
             .arg(top)
             .arg(ASSERT_LEVEL)
             .args(&request.extra);
-        let output = capture(&mut run)?;
+        let output = capture(&mut run).map_err(DriveError::Spawn)?;
         // The log is both streams joined on their boundary; an empty side
         // contributes no line, so a quiet run relays no stray blank line.
         let stdout = lossy(&output.stdout);
@@ -479,17 +509,14 @@ fn analyze_once(file: &Path) -> Result<(), String> {
     match capture(&mut command) {
         Ok(output) if output.status.success() => Ok(()),
         Ok(output) => Err(lossy(&output.stderr)),
-        Err(DriveError::Spawn(message)) => Err(message),
-        Err(_) => Err(format!("{GHDL_BIN}: analyze failed")),
+        Err(message) => Err(message),
     }
 }
 
 /// Spawn a command and capture its output, mapping a spawn failure to the
 /// usage-class error.
-fn capture(command: &mut Command) -> Result<Output, DriveError> {
-    command
-        .output()
-        .map_err(|e| DriveError::Spawn(format!("{GHDL_BIN}: {e}")))
+fn capture(command: &mut Command) -> Result<Output, String> {
+    command.output().map_err(|e| format!("{GHDL_BIN}: {e}"))
 }
 
 /// The captured bytes as text: ghdl writes UTF-8, and the verdict must not
