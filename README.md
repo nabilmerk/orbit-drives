@@ -93,15 +93,18 @@ Subcommands (one per orbit target entry):
   vocabulary and the exit. Build only: yosys has no runtime, there is no
   sim face and nothing runs.
 - `vivado-build` -- the vivado build face: both languages compiled
-  (xvhdl per VHDL file with the deferral loop, one order-free xvlog),
-  then per top the GENERATED synthesis script through
+  (xvhdl per VHDL file into its own blueprint library with the deferral
+  loop, one order-free xvlog into `work`), then per top the GENERATED
+  synthesis script (`read_vhdl -library <lib>` per VHDL file) through
   `vivado -mode batch -nojournal -nolog`, the three netlists the payload.
   Requires `--part <part>` BEFORE any drive (exit 2 at the CLI); no
   simulation, nothing judged.
 - `vivado` -- the vivado sim face: the same compile, then xelab per top
-  and one xsim run per snapshot, every run log gated on vivado's probed
-  LINE-START failure vocabulary AND the exit. xsim exits 0 on BOTH probed
-  runtime failures, so the judge is the load-bearing gate here.
+  (one `-L` per carried library, the top under its own blueprint
+  library) and one xsim run per snapshot, every run log gated on
+  vivado's probed LINE-START failure vocabulary AND the exit. xsim exits
+  0 on BOTH probed runtime failures, so the judge is the load-bearing
+  gate here.
 - `quartus-build` -- the quartus build face, DOCUMENTED-ONLY: per top a
   GENERATED `.qsf` (DEVICE from `--part`, TOP_LEVEL_ENTITY, one
   `VHDL_FILE` / `VERILOG_FILE` line per blueprint file) and one batch
@@ -469,7 +472,7 @@ spawnability probe.
 - **Both languages ride.** vivado is the one carried tool that speaks
   both: `VHDL` entries compile through xvhdl, `VLOG` and `SYSV` entries
   through xvlog, a custom fileset is the loud not-carried face (exit 2).
-- **xvhdl is order-sensitive within the work library**
+- **xvhdl is order-sensitive within a library**
   (`ERROR: [VRFC 10-2987] 'top' is not compiled in library 'work'`,
   exit 1, probed live on 2025.2.1), so the VHDL files compile ONE
   INVOCATION PER FILE in blueprint order through the deferral loop (the
@@ -477,7 +480,8 @@ spawnability probe.
   defers to a retry after the others; a pass that makes no progress
   stops the loop with every residual log relayed.
 - **xvlog is order-free** (a consumer-before-provider pair compiled
-  clean, probed live), so the Verilog files compile in ONE invocation.
+  clean, probed live), so the Verilog files compile in ONE invocation
+  into `work`.
 - **No std flag is pinned.** The tool default compiles GRLIB-scale
   designs green; `--2008` breaks them (the `10-3083` homograph walls,
   probed live). The default is the design, not an
@@ -489,6 +493,71 @@ spawnability probe.
   keeps the compile faces out of the judge, and the honest exit makes
   them unnecessary there.
 
+### The library column (the §25 multi-library face)
+
+The drive consumes the blueprint's library column on BOTH faces, probed
+live on Vivado 2025.2.1 (2026-11-07) -- the same §25 face the ghdl and
+nvc drives carry, on vivado's own one-state-directory resolution:
+
+- **Every xvhdl ride compiles into its own blueprint library**
+  (`xvhdl --work=<entry.library> <file>` -- the §25 ruling: the library
+  name is the project's declared name, orbit's planner is its source of
+  truth, and orbit defaults a project's library to the project's NAME,
+  not to any tool's `work`). Vivado's flow keeps ONE state directory:
+  every named library lands as `xsim.dir/<library>/` inside the working
+  directory's one `xsim.dir/` (probed: `--work=grlib` and `-work work`
+  land as siblings there), so libraries compile in ANY blueprint order
+  and the deferral loop (unchanged, per-file) defers a consumer across
+  the library boundary exactly as within one -- the drive's
+  two-library blueprint runs `3 VHDL file(s) compiled in 3 pass(es)`,
+  probed through the drive.
+- **The state wipe covers the multi-library face for free.** The drive
+  wipes the whole `xsim.dir/` before every drive, and that one
+  directory holds EVERY named library beside the snapshots -- so a
+  library a previous drive analyzed but this blueprint no longer names
+  dies with it, and no stale unit stays resolvable (the same stance as
+  the ghdl and nvc scans, here from vivado's own nested layout: no
+  per-library directories sit beside the state directory for a scan to
+  miss).
+- **xvlog carries no library column.** Verilog speaks no library
+  clauses: every `VLOG`/`SYSV` file lands in `work` (`xvlog -work
+  work`), whatever its row declares, and the generated script's
+  `read_verilog` lines stay plain. Documented, not consumed.
+- **xelab makes every carried library visible and names the top's own**
+  (`xelab -L <lib> ... <the top's library>.<top> -s <top>`): one `-L`
+  per distinct carried VHDL library plus `work` and the resolved top
+  library -- each `-L` makes a library visible for binding (probed: the
+  cross-library reference in a `work` testbench resolves through
+  `xelab -L grlib -L work`; a `-L` naming a library that holds nothing
+  is accepted silently, exit 0 -- over-naming costs nothing), and the
+  design-unit prefix must be the top's OWN library (`work.<top>` against
+  a top compiled into a named library answers
+  `ERROR: [XSIM 43-3225] Cannot find design unit ...`, exit 1). The
+  prefix resolves loudest voice first: `$ORBIT_PROJECT_LIBRARY` (orbit's
+  planner sets it on every spawned target to the working project's
+  library; the designated testbench is a working-project file); then
+  the blueprint's single carried VHDL library (direct invocation
+  without orbit); then vivado's default `work` -- a guess that cannot
+  pass silently, because the wiped `xsim.dir/` cannot hold a stale
+  unit: a wrong guess dies loudly on xelab's refusal.
+- **The generated script reads each file out of its own library**
+  (`read_vhdl -library <entry.library> <file>` -- the compile's mirror:
+  the file xvhdl analyzed into `--work=<lib>` is the file the script
+  reads back out of `<lib>`; a bare `read_vhdl` would land it in `work`
+  where its consumers cannot see it. `-library` on `read_vhdl` is the
+  GRLIB flow's own shape, probed in hdlm's vivado arc and driven live
+  through the gated tests). `synth_design -top` is unchanged.
+- **The argv shape changed with the multi-library face** (2026-11-07):
+  a single-`work` blueprint -- every legacy shape -- now rides the SAME
+  library explicitly: `xvhdl -work work f.vhd` became
+  `xvhdl --work=work f.vhd`, the script's `read_vhdl f.vhd` became
+  `read_vhdl -library work f.vhd`, and the xelab argv is UNCHANGED
+  (`-L work work.<top> -s <top>`: the ladder's fallback IS vivado's
+  default, so the old pin is the new argv there). Nothing about the
+  judged faces moved with it; the probed sequences below carry the new
+  argv verbatim, and the single-`work` live tests drive the new shape
+  end to end.
+
 ### The build face (`vivado-build`)
 
 - **`--part` is required BEFORE any drive** (exit 2 at the CLI naming
@@ -496,10 +565,11 @@ spawnability probe.
   tool. The sim face consumes no part -- the flag on any other face is a
   loud parse error, never a dropped argument.
 - **The synthesis script is GENERATED** per top, written to
-  `orbit-synth-<top>.tcl`: one `read_vhdl` / `read_verilog` per file
-  (the batch `read_*` commands take one file per command, and read
-  order is irrelevant -- probed on 2025.2.1), then `synth_design -top
-  <top> -part <part> -mode out_of_context`, then the three netlist
+  `orbit-synth-<top>.tcl`: one `read_vhdl -library <entry.library>` /
+  `read_verilog` per file (the library face is the library column's,
+  above; the batch `read_*` commands take one file per command, and
+  read order is irrelevant -- probed on 2025.2.1), then `synth_design
+  -top <top> -part <part> -mode out_of_context`, then the three netlist
   writers into `netlists/` (`write_checkpoint -force` .dcp,
   `write_verilog -force` .v, `write_edif -force` .edf).
 - **The catch-guard is the probed trap.** The whole body sits inside ONE
@@ -517,10 +587,11 @@ spawnability probe.
 
 ### The sim face (`vivado`)
 
-- **xelab pins the library and names the top**
-  (`xelab -L work work.<top> -s <top>`); the snapshot lands as
-  `xsim.dir/<top>` and the elaboration validates the top (an unknown top
-  answers `ERROR: [XSIM 43-3225] Cannot find design unit ...`, exit 1,
+- **xelab names every carried library and the top's own**
+  (`xelab -L <lib> ... <the top's library>.<top> -s <top>`, the library
+  column's face above); the snapshot lands as `xsim.dir/<top>` and the
+  elaboration validates the top (an unknown top answers
+  `ERROR: [XSIM 43-3225] Cannot find design unit ...`, exit 1,
   probed).
 - **xsim runs each snapshot once** (`xsim <top> -R`), and THE RUN EXIT
   IS A LIE: xsim exits 0 on a violated `assert ... severity failure`
@@ -789,17 +860,21 @@ the drive joins the streams, so the face reads either way.
 
 | face / fact | argv that wrote it | what the tool did |
 |------|-----|------|
-| `Failure: the design is wrong` (+ the `Time: ... File: ...` line, on stdout) | `xvhdl -work work tb_fatal.vhd && xelab -L work work.tb_fatal -s sim_fail && xsim sim_fail -R` (same through the drive) | a violated `assert ... severity failure` stops the check -- and **xsim EXITS 0**: the run exit is a lie, the line-start face is the only witness |
+| `Failure: the design is wrong` (+ the `Time: ... File: ...` line, on stdout) | `xvhdl --work=work tb_fatal.vhd && xelab -L work work.tb_fatal -s sim_fail && xsim sim_fail -R` (same through the drive) | a violated `assert ... severity failure` stops the check -- and **xsim EXITS 0**: the run exit is a lie, the line-start face is the only witness |
 | `Error: check failed` (+ the continuation `Note:` line, on stdout) | `xsim sim_err -R` on a `severity error` assert | the face prints, the simulation **continues** (`Note: continued past the error` follows), and **xsim still exits 0** -- the same lie; the face convicts |
 | `Note: sim done`, the kernel `INFO:` lines | `xsim sim_clean -R` on a passing testbench | the clean run exits 0 -- continuations, **never judged** |
-| `ERROR: [VRFC 10-4982] syntax error near 'end' [...:9]` (+ `ERROR: [VRFC 10-2989]`, then the `10-8704` ignored line, on **stdout**) | `xvhdl -work work broken.vhd` (same through the drive, which joins the streams) | the compile-error face, **exit 1**; stderr is EMPTY on every stage-binary drive, error or clean; the compile gates on the exit and is never judged -- the uppercase face is deliberately outside the mixed-case vocabulary |
-| `ERROR: [VRFC 10-2987] 'top' is not compiled in library 'work'` | `xvhdl -work work tb_clean.vhd top.vhd gate.vhd` (consumer before provider) | **order-sensitive within work**, exit 1 -- the deferral loop's reason to exist here; even the tb-gate-top order fails (`gate` before `top` is required) |
-| `INFO: [VRFC 10-2263] Analyzing Verilog file ...` , exit 0 | `xvlog vtop.v vgate.v` (consumer before provider) | **order-free** -- xvlog compiles in one invocation, no deferral loop; `-work work` pins the library |
+| `ERROR: [VRFC 10-4982] syntax error near 'end' [...:9]` (+ `ERROR: [VRFC 10-2989]`, then the `10-8704` ignored line, on **stdout**) | `xvhdl --work=work broken.vhd` (same through the drive, which joins the streams) | the compile-error face, **exit 1**; stderr is EMPTY on every stage-binary drive, error or clean; the compile gates on the exit and is never judged -- the uppercase face is deliberately outside the mixed-case vocabulary |
+| `ERROR: [VRFC 10-2987] 'top' is not compiled in library 'work'` | `xvhdl --work=work tb_clean.vhd top.vhd gate.vhd` (consumer before provider) | **order-sensitive within a library**, exit 1 -- the deferral loop's reason to exist here; even the tb-gate-top order fails (`gate` before `top` is required) |
+| `INFO: [VRFC 10-163] Analyzing VHDL file ".../pkg.vhd" into library grlib`, exit 0, and `xsim.dir/grlib/` appears in the cwd | `xvhdl --work=grlib pkg.vhd`, beside a `-work work` compile: `xsim.dir/` then holds `grlib/` and `work/` as siblings | **the library column's compile face**: `--work=<lib>` is accepted with the equals spelling, and every named library lands INSIDE the one `xsim.dir/` of the working directory -- so libraries compile in any order and the wholesale state wipe covers them all at once |
+| `INFO: [VRFC 10-2263] Analyzing Verilog file ...` , exit 0 | `xvlog vtop.v vgate.v` (consumer before provider) | **order-free** -- xvlog compiles in one invocation, no deferral loop; `-work work` pins the library (Verilog speaks no library clauses: the blueprint's library column has no xvlog face) |
+| `Compiling package grlib.grlib_pkg` ... `Built simulation snapshot tb`, exit 0; then `Note: SIM PASSED`, exit 0 | `xelab -L grlib -L work work.tb -s tb && xsim tb -R` (the package compiled into `--work=grlib`, the design and tb into `work`) | **the library column's bind face**: one `-L` per carried library makes each visible for binding and the cross-library reference resolves; the top rides its own library's prefix (`work.tb`) |
+| exit 0, `Built simulation snapshot tb2` | `xelab -L grlib -L work grlib.tb -s tb` with EVERYTHING compiled into `--work=grlib` (`xsim.dir/` holds no `work/` at all), and `xelab -L grlib -L nosuchlib grlib.tb -s tb` | the single-library collapse: an explicit non-`work` prefix works, and a `-L` naming an absent library is accepted **silently** -- over-naming costs nothing, under-naming strands the binding |
 | `ERROR: [XSIM 43-3225] Cannot find design unit work.tb_nosuch in library work located at xsim.dir/work.` | `xelab -L work work.tb_nosuch -s sim_nosuch` | the elaboration refusal of an unknown top, **exit 1** -- honest, the elaboration gates on the exit |
 | `ERROR: Please check the snapshot name ... does not exist` | `xsim nosuch_snap -R` | the missing-snapshot face, **exit 1** -- the crash door; uppercase, outside the vocabulary, the exit convicts |
 | `SYNTH FAILED: ERROR: [Common 17-69] Command failed: Vivado Synthesis failed`, **exit 1** | `vivado -mode batch -nojournal -nolog -source synth.tcl` with a syntax-broken `read_vhdl` inside the catch-guard | the fail-fast batch face: the return-code catch-guard stops the script and exits 1 (unguarded batch **continues past a failed synth_design**, probed) |
 | **exit 1 with all three netlists written** | the same script whose guard tested `$synth_err` emptiness instead of catch's return code | **the probed Tcl trap**: `catch {script} var` writes the script's NORMAL RETURN VALUE into `var`, and `write_verilog`/`write_checkpoint` return the written filename -- an emptiness guard false-fails a CLEAN synth |
 | exit 0, `netlists/top.dcp` + `top.v` + `top.edf` written | `vivado -mode batch -nojournal -nolog -source synth.tcl`, guard on catch's return code, `synth_design -top top -part xc7z010clg400-1 -mode out_of_context` | the clean synth face; the echo of the sourced commands rides stdout, the synth errors ride **stderr**, exit honest |
+| exit 0, the netlists written, a TWO-library closure (`read_vhdl -library grlib ./pkg.vhd` + `read_vhdl -library work ./gate.vhd` + `read_vhdl -library work ./tb.vhd` in the sourced script) | the generated script driven through `vivado-build` (`cargo test -- --ignored`, the gated harness) | **the library column's script face**: each VHDL read names the file's own library -- the compile's mirror, the GRLIB flow's own shape (probed in hdlm's vivado arc); `synth_design -top` finds the top across the named libraries unchanged |
 | `-version` exits 0 on every family binary | `vivado -version`, `xvhdl -version`, `xvlog -version`, `xelab -version`, `xsim -version` | the identity face (single dash), the drive's spawnability probe |
 
 vivado's run vocabulary is line-start mixed-case and case-exact: an
@@ -888,22 +963,30 @@ vocabulary, never this one.
   - **the build face's state** (quartus_map's compilation database): a
     stale database could make a re-drive incremental; the first probed
     re-drive decides whether the wipe list grows.
-- **The library column is load-bearing on the VHDL drives, carried on
-  the rest.** The nvc drive consumes the blueprint's library column
-  verbatim -- every file analyzed into `--work=<entry.library>` (the §25
-  multi-library face, probed live on nvc 1.23.0, 2026-11-07), every
-  spawn carrying `-L .`, the wipe taking every `_NVC_LIB`-marked
-  directory, and the elaborate/run argv pinning the top's library
-  (resolved from `$ORBIT_PROJECT_LIBRARY`, then the blueprint's single
-  carried library, then nvc's default `work`). The ghdl drive consumes
-  the same column on its own resolution (probed live on ghdl 6.0.0, the
-  same day): per-file `--work=`, the cwd-sibling `-obj08.cf` files doing
-  the resolution no search flag needed, the wipe taking every
-  `<library>-obj08.cf`, and the same three-voice ladder on the
-  elaborate/run argv. Every OTHER drive still maps nothing: iverilog
-  compiles into its one snapshot, verilator lints and builds one
-  fileset, and the vivado and quartus faces compile their filesets as
-  given -- a multi-library orbit project on those drives stays out of
+- **The library column is load-bearing on the VHDL drives and on
+  vivado; carried on the rest.** The nvc drive consumes the blueprint's
+  library column verbatim -- every file analyzed into
+  `--work=<entry.library>` (the §25 multi-library face, probed live on
+  nvc 1.23.0, 2026-11-07), every spawn carrying `-L .`, the wipe taking
+  every `_NVC_LIB`-marked directory, and the elaborate/run argv pinning
+  the top's library (resolved from `$ORBIT_PROJECT_LIBRARY`, then the
+  blueprint's single carried library, then nvc's default `work`). The
+  ghdl drive consumes the same column on its own resolution (probed
+  live on ghdl 6.0.0, the same day): per-file `--work=`, the
+  cwd-sibling `-obj08.cf` files doing the resolution no search flag
+  needed, the wipe taking every `<library>-obj08.cf`, and the same
+  three-voice ladder on the elaborate/run argv. The vivado drive
+  consumes it on BOTH faces (probed live on Vivado 2025.2.1, the same
+  day): every xvhdl ride into `--work=<entry.library>`, xelab carrying
+  one `-L` per distinct library and naming the top under the same
+  three-voice ladder, and the generated script's `read_vhdl -library`
+  lines reading each file back out of its own library -- while the
+  Verilog legs stay single-library (`xvlog -work work`, `read_verilog`
+  plain: Verilog speaks no library clauses, documented). Every OTHER
+  drive still maps nothing: iverilog compiles into its one snapshot,
+  verilator lints and builds one fileset, and the quartus faces compile
+  their filesets as given (`VHDL_FILE` / `VERILOG_FILE` lines, no
+  library) -- a multi-library orbit project on quartus stays out of
   scope for v1.
 - **The standards are pinned where the tools pin them** (`--std=08` for
   ghdl, `--std=2008` for nvc, `-g2012` for iverilog, `-2008` for the
@@ -922,8 +1005,11 @@ vocabulary, never this one.
   `<library>-obj08.cf` file in the output directory -- the same
   whole-per-library set, the name lowercased by ghdl; iverilog's
   snapshot; verilator's
-  `obj_dir`; yosys's `netlists/`; vivado's `xsim.dir/` and, on the build
-  face, its `netlists/`; the quartus sim face's `work/` +
+  `obj_dir`; yosys's `netlists/`; vivado's `xsim.dir/` -- the WHOLE
+  state directory, which on a multi-library blueprint is the whole
+  per-library set for free, because vivado nests every named library
+  inside that one directory -- and, on the build face, its
+  `netlists/`; the quartus sim face's `work/` +
   `modelsim.ini`, DOCUMENTED-ONLY; cocotb's `sim_build/`). A large
   design pays a full re-analysis per drive; correctness before
   incrementality is the v1 stance. (Probed honestly: ghdl's wipe is
@@ -933,7 +1019,10 @@ vocabulary, never this one.
   not stay resolvable; nvc's
   is load-bearing on a multi-library blueprint for the same reason, even
   though
-  nvc itself tolerates re-analysis in a stale library; iverilog's
+  nvc itself tolerates re-analysis in a stale library; vivado's is
+  load-bearing on a multi-library blueprint for the same reason -- the
+  wholesale `xsim.dir/` wipe takes every named library with it, so no
+  stale unit stays resolvable; iverilog's
   snapshot cannot be run past a
   failed compile, verilator's `--build` regenerates its intermediates, a
   failed yosys synth exits before its netlist could be mistaken for

@@ -25,8 +25,10 @@ pub struct Entry {
     /// library name (orbit defaults it to the project's own name, not to
     /// any tool's `work`). Consumed verbatim by the VHDL drives' per-file
     /// `--work` pin (the §25 multi-library face, probed live on ghdl
-    /// 6.0.0 and nvc 1.23.0); the other drives still analyze every file
-    /// into their tool's single default library.
+    /// 6.0.0 and nvc 1.23.0) and by the vivado drive on both faces -- the
+    /// per-file xvhdl pin and the generated script's `read_vhdl -library`
+    /// lines (probed live on Vivado 2025.2.1); the other drives still
+    /// compile every file into their tool's single default library.
     pub library: String,
     /// The file path, as the blueprint wrote it.
     pub path: PathBuf,
@@ -279,11 +281,14 @@ pub fn verilog_only(entries: &[Entry]) -> Result<Vec<PathBuf>, crate::iverilog::
     }
 }
 
-/// The VHDL and Verilog files of the blueprint, in blueprint order: the
-/// pair the vivado and quartus build faces compile -- VHDL entries to
-/// their VHDL compilers (xvhdl; the .qsf's `VHDL_FILE` lines), `VLOG`
-/// and `SYSV` entries to their Verilog compilers (xvlog; the .qsf's
-/// `VERILOG_FILE` lines).
+/// The VHDL entries and the Verilog files of the blueprint, in blueprint
+/// order: the pair the vivado faces consume -- the VHDL entries with
+/// their blueprint libraries ATTACHED (every xvhdl ride compiles into
+/// `--work=<entry.library>`, the §25 multi-library face, probed live on
+/// Vivado 2025.2.1, and the generated synthesis script reads each back
+/// with `read_vhdl -library <entry.library>`), the `VLOG` and `SYSV`
+/// entries as bare paths (Verilog carries no library clauses -- xvlog
+/// lands them all in `work`).
 ///
 /// Two carried tools speak both languages, so this is the filter shape
 /// that carries two fileset families. Every OTHER entry -- a custom
@@ -292,11 +297,11 @@ pub fn verilog_only(entries: &[Entry]) -> Result<Vec<PathBuf>, crate::iverilog::
 ///
 /// The error type is [`crate::vivado::NotCarried`] -- its message names
 /// the three carried filesets, not one face, because both vivado faces
-/// carry it. The quartus build face takes the same pair through
+/// carry it. The quartus build face takes the paths-only pair through
 /// [`quartus_files`], whose error message names quartus's faces.
 pub fn vivado_files(
     entries: &[Entry],
-) -> Result<(Vec<PathBuf>, Vec<PathBuf>), crate::vivado::NotCarried> {
+) -> Result<(Vec<Entry>, Vec<PathBuf>), crate::vivado::NotCarried> {
     let foreign: Vec<Entry> = entries
         .iter()
         .filter(|entry| {
@@ -309,7 +314,7 @@ pub fn vivado_files(
         let mut verilog = Vec::new();
         for entry in entries {
             if entry.fileset == "VHDL" {
-                vhdl.push(entry.path.clone());
+                vhdl.push(entry.clone());
             } else {
                 verilog.push(entry.path.clone());
             }
@@ -469,16 +474,20 @@ mod tests {
     #[test]
     fn the_vivado_drives_carry_both_languages_and_name_the_rest() {
         // Vivado speaks VHDL and Verilog: the one filter that carries two
-        // fileset families, each file split to its own compile.
+        // fileset families -- the VHDL entries with their blueprint
+        // libraries attached (the §25 column, consumed on both faces),
+        // the Verilog entries as bare paths (no library clauses to
+        // consume).
         let entries = parse_blueprint(
-            "VLOG\twork\t./b.v\nVHDL\twork\t./a.vhd\nSYSV\twork\t./c.sv\nVHDL\twork\t./d.vhd\n",
+            "VLOG\twork\t./b.v\nVHDL\tgrlib\t./a.vhd\nSYSV\twork\t./c.sv\nVHDL\twork\t./d.vhd\n",
         )
         .unwrap();
         let (vhdl, verilog) = vivado_files(&entries).unwrap();
-        assert_eq!(
-            vhdl,
-            vec![PathBuf::from("./a.vhd"), PathBuf::from("./d.vhd")]
-        );
+        assert_eq!(vhdl.len(), 2);
+        assert_eq!(vhdl[0].path, PathBuf::from("./a.vhd"));
+        assert_eq!(vhdl[0].library, "grlib");
+        assert_eq!(vhdl[1].path, PathBuf::from("./d.vhd"));
+        assert_eq!(vhdl[1].library, "work");
         assert_eq!(
             verilog,
             vec![PathBuf::from("./b.v"), PathBuf::from("./c.sv")]

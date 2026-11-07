@@ -4,7 +4,10 @@
 //! directory at the target's output directory -- across the deferral
 //! loop's order-sensitive compile, the part gate, a judged compile
 //! failure, the LYING RUN EXIT (a severity-failure testbench that exits 0
-//! and must fail on its `Failure:` face), and the clean sim.
+//! and must fail on its `Failure:` face), the clean sim, the
+//! multi-library face (a two-library blueprint whose cross-library
+//! reference resolves, driven through BOTH faces), and the generated
+//! script's `read_vhdl -library` lines.
 //!
 //! Ignored by default -- it needs the Vivado install; run it with
 //! `cargo test -- --ignored`. The test locates the install the way the
@@ -128,23 +131,81 @@ end architecture sim;
     );
 }
 
+/// The grlib package of the multi-library fixture, and the design and
+/// testbench that consume it across the library boundary -- the multilib
+/// demo's own shape: the package in `grlib`, the design and testbench in
+/// `work`, both consuming `library grlib;`.
+fn write_multilib(out: &Path) {
+    write(
+        &out.join("pkg.vhd"),
+        "\
+package grlib_pkg is
+  constant WIDTH : integer := 8;
+end package;
+",
+    );
+    write(
+        &out.join("gate.vhd"),
+        "\
+library grlib;
+use grlib.grlib_pkg.all;
+entity gate is
+  port ( o : out integer );
+end entity;
+architecture rtl of gate is
+begin
+  o <= WIDTH;
+end architecture;
+",
+    );
+    write(
+        &out.join("tb.vhd"),
+        "\
+library grlib;
+use grlib.grlib_pkg.all;
+entity tb is
+end entity;
+architecture sim of tb is
+  signal o : integer;
+begin
+  dut : entity work.gate port map (o);
+  process begin
+    wait for 1 ns;
+    assert o = 8 report \"width drifted\" severity failure;
+    report \"SIM PASSED\";
+    wait;
+  end process;
+end architecture;
+",
+    );
+}
+
 /// The exact spawn shape: no `--top`, `$ORBIT_TB_NAME` exported, the
 /// working directory at the target's output directory, `VIVADO_BIN`
-/// pointing at the resolved install.
+/// pointing at the resolved install, and `$ORBIT_PROJECT_LIBRARY` set
+/// only when the test asks for it -- orbit always sets it on a real
+/// target, so the direct-invocation tests strip it (an inherited value
+/// from the driving shell would leak in).
 fn spawn_shape<'a>(
     command: &'a mut Command,
     out: &Path,
     vivado: &Path,
     tb: &str,
+    project_library: Option<&str>,
 ) -> &'a mut Command {
-    command
+    let shaped = command
         .env("VIVADO_BIN", vivado)
         .env("ORBIT_BLUEPRINT", out.join("blueprint.tsv"))
         .env("ORBIT_TB_NAME", tb)
         .env_remove("ORBIT_BLUEPRINT_PLAN")
+        .env_remove("ORBIT_PROJECT_LIBRARY")
         .env_remove("LOCPATH")
-        .env_remove("LD_LIBRARY_PATH")
-        .current_dir(out)
+        .env_remove("LD_LIBRARY_PATH");
+    let shaped = match project_library {
+        Some(library) => shaped.env("ORBIT_PROJECT_LIBRARY", library),
+        None => shaped,
+    };
+    shaped.current_dir(out)
 }
 
 #[test]
@@ -170,6 +231,7 @@ fn the_real_vivado_sim_faces_catch_the_lying_exit_and_run_clean() {
         &out,
         &vivado,
         "tb_clean",
+        None,
     )
     .output()
     .unwrap();
@@ -201,6 +263,7 @@ fn the_real_vivado_sim_faces_catch_the_lying_exit_and_run_clean() {
         &out,
         &vivado,
         "tb_fatal",
+        None,
     )
     .output()
     .unwrap();
@@ -259,6 +322,7 @@ end architecture rtl;
         &out,
         &vivado,
         "broken",
+        None,
     )
     .output()
     .unwrap();
@@ -307,6 +371,7 @@ fn the_real_vivado_build_face_requires_the_part_before_any_drive() {
         &out,
         &vivado,
         "top",
+        None,
     )
     .output()
     .unwrap();
@@ -333,6 +398,7 @@ fn the_real_vivado_build_face_requires_the_part_before_any_drive() {
         &out,
         &vivado,
         "top",
+        None,
     )
     .output()
     .unwrap();
@@ -381,6 +447,7 @@ fn the_real_vivado_build_face_synthesizes_and_writes_the_netlists() {
         &out,
         &vivado,
         "top",
+        None,
     )
     .output()
     .unwrap();
@@ -401,4 +468,161 @@ fn the_real_vivado_build_face_synthesizes_and_writes_the_netlists() {
             "the {netlist} payload should land"
         );
     }
+
+    // The generated script's library face, live: every VHDL read names
+    // the library the file was compiled into -- the single-`work`
+    // blueprint reads back as explicit `-library work`, not the bare
+    // `read_vhdl` the pre-library drive wrote.
+    let script = fs::read_to_string(out.join("orbit-synth-top.tcl")).unwrap();
+    assert!(
+        script.contains("read_vhdl -library work ./gate.vhd\n"),
+        "the script should read gate back out of work:\n{script}"
+    );
+    assert!(
+        script.contains("read_vhdl -library work ./top.vhd\n"),
+        "the script should read top back out of work:\n{script}"
+    );
+    assert!(
+        !script.contains("read_verilog"),
+        "a VHDL-only blueprint should write no Verilog read:\n{script}"
+    );
+}
+
+#[test]
+#[ignore = "needs the Vivado install (VIVADO_BIN or the standard prefix); run with `cargo test -- --ignored`"]
+fn the_real_vivado_drive_consumes_two_libraries_end_to_end() {
+    let Some(vivado) = vivado_bin() else {
+        eprintln!("skipping: no Vivado install found");
+        return;
+    };
+
+    let out =
+        std::env::temp_dir().join(format!("orbit-drives-viv-multilib-{}", std::process::id()));
+    fs::create_dir_all(&out).unwrap();
+
+    // grlib carries the package; work carries the design and the
+    // testbench, which both reference `library grlib;`. The consumer rows
+    // come FIRST, so the drive only completes through the deferral loop
+    // -- across libraries now, not just within one: pass 1 fails the
+    // consumers on their absent providers, pkg creates the grlib
+    // library, pass 2 retires the design, pass 3 the testbench.
+    write_multilib(&out);
+    write(
+        &out.join("blueprint.tsv"),
+        "VHDL\twork\t./tb.vhd\nVHDL\twork\t./gate.vhd\nVHDL\tgrlib\t./pkg.vhd\n",
+    );
+
+    // The orbit shape: `$ORBIT_PROJECT_LIBRARY` names the working
+    // project's library (`work` here; under a real orbit project it is
+    // the project's NAME -- the ladder reads it first either way).
+    let orbit_shape = spawn_shape(
+        Command::new(env!("CARGO_BIN_EXE_orbit-drives")).arg("vivado"),
+        &out,
+        &vivado,
+        "tb",
+        Some("work"),
+    )
+    .output()
+    .unwrap();
+    assert!(
+        orbit_shape.status.success(),
+        "the multi-library run (with orbit's env) failed:\n{}{}",
+        String::from_utf8_lossy(&orbit_shape.stdout),
+        String::from_utf8_lossy(&orbit_shape.stderr)
+    );
+    let stdout = String::from_utf8_lossy(&orbit_shape.stdout);
+    assert!(
+        stdout.contains("3 VHDL file(s) compiled in 3 pass(es)"),
+        "the deferral loop should defer across libraries: tb and gate wait on their \
+         providers:\n{stdout}"
+    );
+    assert!(
+        stdout.contains("tb: pass"),
+        "the cross-library run should judge clean:\n{stdout}"
+    );
+    assert!(
+        stdout.contains("SIM PASSED"),
+        "the relayed log should carry the testbench's own report -- the cross-library \
+         reference resolved through xelab's -L pins:\n{stdout}"
+    );
+
+    // The second run in the SAME directory: the wholesale `xsim.dir/`
+    // wipe takes every named library of the run before with it -- the
+    // run-scoped state covers the multi-library face for free, because
+    // vivado nests every library in the one state directory.
+    let second = spawn_shape(
+        Command::new(env!("CARGO_BIN_EXE_orbit-drives")).arg("vivado"),
+        &out,
+        &vivado,
+        "tb",
+        Some("work"),
+    )
+    .output()
+    .unwrap();
+    assert!(
+        second.status.success(),
+        "the second multi-library run failed:\n{}{}",
+        String::from_utf8_lossy(&second.stdout),
+        String::from_utf8_lossy(&second.stderr)
+    );
+
+    // The same blueprint, direct invocation (no orbit env): the ladder
+    // falls to vivado's default `work` -- the designated top's own
+    // library here -- and the drive still completes, starting from the
+    // wiped state of the run before.
+    let direct = spawn_shape(
+        Command::new(env!("CARGO_BIN_EXE_orbit-drives")).arg("vivado"),
+        &out,
+        &vivado,
+        "tb",
+        None,
+    )
+    .output()
+    .unwrap();
+    assert!(
+        direct.status.success(),
+        "the multi-library run (direct, no env) failed:\n{}{}",
+        String::from_utf8_lossy(&direct.stdout),
+        String::from_utf8_lossy(&direct.stderr)
+    );
+
+    // The build face on the same two-library blueprint: the script reads
+    // each file out of ITS library and the cross-library synth still
+    // completes -- the netlists land. The top here is the fixture's own
+    // `tb` (the multilib fixture has no entity named `top`).
+    let synth = spawn_shape(
+        Command::new(env!("CARGO_BIN_EXE_orbit-drives"))
+            .arg("vivado-build")
+            .arg("--part")
+            .arg("xc7z010clg400-1"),
+        &out,
+        &vivado,
+        "tb",
+        Some("work"),
+    )
+    .output()
+    .unwrap();
+    assert!(
+        synth.status.success(),
+        "the multi-library synth failed:\n{}{}",
+        String::from_utf8_lossy(&synth.stdout),
+        String::from_utf8_lossy(&synth.stderr)
+    );
+    let script = fs::read_to_string(out.join("orbit-synth-tb.tcl")).unwrap();
+    assert!(
+        script.contains("read_vhdl -library grlib ./pkg.vhd\n"),
+        "the script should read pkg back out of grlib:\n{script}"
+    );
+    assert!(
+        script.contains("read_vhdl -library work ./gate.vhd\n"),
+        "the script should read gate back out of work:\n{script}"
+    );
+    for netlist in ["netlists/tb.dcp", "netlists/tb.v", "netlists/tb.edf"] {
+        assert!(
+            out.join(netlist).exists(),
+            "the {netlist} payload should land on the multi-library synth"
+        );
+    }
+
+    fs::remove_dir_all(&out).ok();
 }
