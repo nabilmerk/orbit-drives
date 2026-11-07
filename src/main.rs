@@ -1,14 +1,20 @@
 //! The `orbit-contracts` binary: argv in, honest exit out.
 //!
 //! ```text
-//! orbit-contracts ghdl --blueprint <path> --top <name> [--] [extra ghdl args]
+//! orbit-contracts ghdl --blueprint <path> --top <name> [extra ghdl args...]
 //! ```
 //!
 //! Orbit spawns the target with the working directory set to the target's
 //! output directory and `ORBIT_BLUEPRINT` pointing at the plan file, so
 //! the default blueprint is the environment's; `--blueprint` overrides it
-//! for direct drives. Arguments after `--` are orbit-appended ghdl run
-//! options and reach the `ghdl -r` argv verbatim.
+//! for direct drives. Orbit consumes its own `--` separator and appends
+//! the user's extras straight onto the target's argv
+//! (`src/core/target.rs` of orbit: `[&arguments, extra_args].concat()`),
+//! so there is no separator to find here: the drive's own flags are
+//! `--blueprint`, `--top`, `-h`/`--help`, and EVERY other token rides the
+//! `ghdl -r` argv verbatim. With no `--top`, the drive runs the testbench
+//! orbit exports as `$ORBIT_TB_NAME` (empty in all-mode, which counts as
+//! absent); it is a loud exit-2 when neither names a top.
 
 use std::env;
 use std::path::PathBuf;
@@ -22,23 +28,35 @@ const USAGE: &str = "\
 orbit-contracts: the probed failure vocabularies and the honest-exit targets for orbit
 
 USAGE:
-    orbit-contracts <TOOL> [TOOL OPTIONS] [--] [EXTRA TOOL ARGS]
+    orbit-contracts <TOOL> [TOOL OPTIONS] [EXTRA TOOL ARGS...]
 
 TOOLS:
     ghdl    analyze the blueprint's VHDL in blueprint order, elaborate and
-            run each --top, and gate every run log on ghdl's probed
-            failure vocabulary
+            run each top, and gate every run log on ghdl's probed failure
+            vocabulary
 
 GHDL OPTIONS:
     --blueprint <path>  the TSV blueprint (default: $ORBIT_BLUEPRINT)
-    --top <name>        a top unit to elaborate and run (repeatable, required)
-    --                  everything after is appended to each `ghdl -r` argv
+    --top <name>        a top unit to elaborate and run (repeatable)
     -h, --help          print this help
 
+TOPS:
+    with no --top, the drive runs the testbench orbit exports as
+    $ORBIT_TB_NAME (empty in all-mode counts as absent); exit 2 when
+    neither names a top
+
+EXTRAS:
+    every other argument rides the `ghdl -r` argv verbatim: orbit strips
+    its own `--` separator and appends the extras straight onto this
+    argv, so `orbit test --target ghdl -- -gW=4 --vcd=w.vcd` passes both
+    through to ghdl
+
 EXITS:
-    0    clean (every run log judged clean)
-    1    findings (a log carried a failure face, or ghdl reported a broken design)
-    2    usage (bad argv, unreadable blueprint, a fileset the drive does not carry)
+    0    clean (every run judged clean)
+    1    findings (a log carried a failure face, a run exited nonzero, or
+         ghdl reported a broken design)
+    2    usage (bad argv, no top to run, unreadable blueprint, a fileset
+         the drive does not carry)
 ";
 
 /// The argv parse outcome.
@@ -96,16 +114,17 @@ fn parse(argv: &[String]) -> Result<Cli, CliError> {
                     .ok_or_else(|| CliError("--top needs a unit name".to_string()))?;
                 tops.push(value.clone());
             }
+            // Orbit strips its own separator before this argv lands here,
+            // so this only fires on direct drives: everything after it
+            // rides the run verbatim, without a second look.
             "--" => {
-                extra = rest.cloned().collect();
+                extra.extend(rest.cloned());
                 break;
             }
-            other => {
-                return Err(CliError(format!(
-                    "unknown argument {other:?} for tool {}",
-                    tool.name()
-                )));
-            }
+            // Everything the drive does not own is a ghdl run extra: the
+            // orbit spawn shape appends the user's extras with no
+            // separator, and rejecting one would reject the whole target.
+            other => extra.push(other.to_string()),
         }
     }
     Ok(Cli::Run(Request {
@@ -132,6 +151,23 @@ fn main() -> ExitCode {
     }
 }
 
+/// The tops to drive: the explicit `--top` units, else the testbench orbit
+/// exports for the run.
+///
+/// `orbit test --target ghdl` never passes `--top`; it exports the
+/// designated testbench as `$ORBIT_TB_NAME` instead. In all-mode orbit
+/// exports the empty string, which counts as absent -- as does a missing
+/// variable.
+fn resolve_tops(explicit: Vec<String>, tb_name: Option<&str>) -> Vec<String> {
+    if !explicit.is_empty() {
+        return explicit;
+    }
+    match tb_name {
+        Some(name) if !name.is_empty() => vec![name.to_string()],
+        _ => Vec::new(),
+    }
+}
+
 /// Resolve the environment's gaps and hand the request to the drive,
 /// mapping the outcome to the honest exit.
 fn drive_request(request: Request) -> ExitCode {
@@ -142,13 +178,25 @@ fn drive_request(request: Request) -> ExitCode {
         eprintln!("orbit-contracts: error: no blueprint to read: pass --blueprint <path> or set ORBIT_BLUEPRINT");
         return ExitCode::from(2);
     };
-    if request.tops.is_empty() {
-        eprintln!("orbit-contracts: error: no --top given: name at least one top unit to elaborate and run");
+    let defaulted = request.tops.is_empty();
+    let tb_name = env::var("ORBIT_TB_NAME").ok();
+    let tops = resolve_tops(request.tops, tb_name.as_deref());
+    if tops.is_empty() {
+        eprintln!(
+            "orbit-contracts: error: no top to run: pass --top <name>, or run through \
+             `orbit test --target ghdl` so $ORBIT_TB_NAME is set"
+        );
         return ExitCode::from(2);
+    }
+    if defaulted {
+        eprintln!(
+            "orbit-contracts: note: no --top given; running the testbench $ORBIT_TB_NAME: {}",
+            tops[0]
+        );
     }
     match ghdl::drive(&ghdl::Drive {
         blueprint,
-        tops: request.tops,
+        tops,
         extra: request.extra,
     }) {
         Ok(()) => ExitCode::SUCCESS,
@@ -226,8 +274,29 @@ mod tests {
     }
 
     #[test]
-    fn an_unknown_flag_is_a_loud_usage_error() {
-        assert!(parse(&argv(&["ghdl", "--frobnicate"])).is_err());
+    fn an_unknown_flag_rides_the_run_as_an_extra() {
+        // The orbit spawn shape appends the user's extras with no
+        // separator: `-gW=4 --vcd=w.vcd` reaches this argv bare, and
+        // rejecting one would reject the whole target.
+        let request = run_of(
+            parse(&argv(&[
+                "ghdl",
+                "--top",
+                "tb",
+                "-gW=4",
+                "--vcd=w.vcd",
+                "--frobnicate",
+            ]))
+            .unwrap(),
+        );
+        assert_eq!(
+            request.extra,
+            vec![
+                "-gW=4".to_string(),
+                "--vcd=w.vcd".to_string(),
+                "--frobnicate".to_string()
+            ]
+        );
     }
 
     #[test]
@@ -240,5 +309,24 @@ mod tests {
     fn empty_argv_is_a_loud_usage_error() {
         let err = parse(&[]).unwrap_err();
         assert_eq!(err.0, "no tool given");
+    }
+
+    #[test]
+    fn explicit_tops_win_over_the_exported_testbench() {
+        let tops = resolve_tops(vec!["tb_a".to_string()], Some("tb_exported"));
+        assert_eq!(tops, vec!["tb_a".to_string()]);
+    }
+
+    #[test]
+    fn the_exported_testbench_fills_an_empty_top_list() {
+        let tops = resolve_tops(Vec::new(), Some("tb_exported"));
+        assert_eq!(tops, vec!["tb_exported".to_string()]);
+    }
+
+    #[test]
+    fn an_empty_export_counts_as_absent() {
+        // orbit exports the empty string in all-mode.
+        assert!(resolve_tops(Vec::new(), Some("")).is_empty());
+        assert!(resolve_tops(Vec::new(), None).is_empty());
     }
 }

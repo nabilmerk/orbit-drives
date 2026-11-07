@@ -70,6 +70,40 @@ impl fmt::Display for MalformedLine {
 
 impl std::error::Error for MalformedLine {}
 
+/// The error for a blueprint the drive could not read or parse.
+#[derive(Debug)]
+pub enum BlueprintError {
+    /// The blueprint file could not be read.
+    Read {
+        /// The blueprint path, as the drive was handed it.
+        path: PathBuf,
+        /// The read failure.
+        source: std::io::Error,
+    },
+    /// A line was not `fileset<TAB>library<TAB>filepath`.
+    Parse(MalformedLine),
+}
+
+impl fmt::Display for BlueprintError {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        match self {
+            BlueprintError::Read { path, source } => {
+                write!(f, "cannot read {}: {source}", path.display())
+            }
+            BlueprintError::Parse(e) => write!(f, "{e}"),
+        }
+    }
+}
+
+impl std::error::Error for BlueprintError {
+    fn source(&self) -> Option<&(dyn std::error::Error + 'static)> {
+        match self {
+            BlueprintError::Read { source, .. } => Some(source),
+            BlueprintError::Parse(e) => Some(e),
+        }
+    }
+}
+
 /// Parse the TSV blueprint text into entries, in file order.
 ///
 /// Blank lines are skipped; anything else must carry exactly three
@@ -243,10 +277,10 @@ impl RunOutcome {
 
 /// How the drive turned out. Every variant is rendered on stderr by
 /// [`drive`] before it is returned; the variant only picks the exit code.
-#[derive(Clone, Debug, PartialEq, Eq)]
+#[derive(Debug)]
 pub enum DriveError {
     /// The blueprint could not be read or parsed: usage-class, exit 2.
-    Blueprint(String),
+    Blueprint(BlueprintError),
     /// The blueprint carried filesets the drive does not speak yet:
     /// usage-class, exit 2.
     NotCarried(NotCarried),
@@ -282,10 +316,28 @@ impl DriveError {
 pub struct Drive {
     /// The blueprint file: the `--blueprint` path or `$ORBIT_BLUEPRINT`.
     pub blueprint: PathBuf,
-    /// The top units to elaborate and run, in the order given.
+    /// The top units to elaborate and run, in the order given. The caller
+    /// resolves the `$ORBIT_TB_NAME` default; the drive runs what it is
+    /// handed.
     pub tops: Vec<String>,
-    /// The argv orbit collected after `--`, appended to each `ghdl -r`.
+    /// The extra tokens riding each `ghdl -r` argv: orbit appends the
+    /// user's extras with the `--` separator stripped, and the argv
+    /// parser passes through every token the drive does not own.
     pub extra: Vec<String>,
+}
+
+/// The note for a blueprint plan the drive does not carry: orbit exports
+/// `$ORBIT_BLUEPRINT_PLAN` as the plan it wrote, and the drive speaks the
+/// TSV plan only. Loud but non-fatal -- the file is still read as TSV
+/// lines, and a non-TSV file fails the parse loudly right after.
+fn plan_note(plan: Option<&str>) -> Option<String> {
+    match plan {
+        Some(plan) if plan != "tsv" => Some(format!(
+            "orbit-contracts: ghdl: note: $ORBIT_BLUEPRINT_PLAN is {plan:?}; the drive \
+             carries the TSV plan only, reading the blueprint as TSV lines"
+        )),
+        _ => None,
+    }
 }
 
 /// Drive the ghdl target end to end: blueprint, analyze, elaborate, run,
@@ -302,10 +354,23 @@ pub fn drive(request: &Drive) -> Result<(), DriveError> {
     // a loud usage error instead of a deferral-loop residual.
     capture(Command::new(GHDL_BIN).arg("--version"))?;
 
-    let text = fs::read_to_string(&request.blueprint).map_err(|e| {
-        DriveError::Blueprint(format!("cannot read {}: {e}", request.blueprint.display()))
+    if let Some(note) = plan_note(std::env::var("ORBIT_BLUEPRINT_PLAN").ok().as_deref()) {
+        eprintln!("{note}");
+    }
+
+    let text = fs::read_to_string(&request.blueprint).map_err(|source| {
+        let e = BlueprintError::Read {
+            path: request.blueprint.clone(),
+            source,
+        };
+        eprintln!("orbit-contracts: ghdl: error: {e}");
+        DriveError::Blueprint(e)
     })?;
-    let entries = parse_blueprint(&text).map_err(|e| DriveError::Blueprint(e.to_string()))?;
+    let entries = parse_blueprint(&text).map_err(|e| {
+        let e = BlueprintError::Parse(e);
+        eprintln!("orbit-contracts: ghdl: error: {e}");
+        DriveError::Blueprint(e)
+    })?;
     let files = vhdl_only(&entries).map_err(|e| {
         eprintln!("orbit-contracts: ghdl: error: {e}");
         DriveError::NotCarried(e)
@@ -646,7 +711,22 @@ tb_err.vhd:9:5:@0ms:(report note): simulation continued
 
     #[test]
     fn drive_errors_map_to_honest_exit_codes() {
-        assert_eq!(DriveError::Blueprint("nope".to_string()).exit_code(), 2);
+        assert_eq!(
+            DriveError::Blueprint(BlueprintError::Read {
+                path: PathBuf::from("nope"),
+                source: std::io::Error::new(std::io::ErrorKind::NotFound, "nope"),
+            })
+            .exit_code(),
+            2
+        );
+        assert_eq!(
+            DriveError::Blueprint(BlueprintError::Parse(MalformedLine {
+                line: 1,
+                text: "VHDL\twork".to_string(),
+            }))
+            .exit_code(),
+            2
+        );
         assert_eq!(
             DriveError::NotCarried(NotCarried {
                 entries: Vec::new()
