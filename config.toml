@@ -1,5 +1,6 @@
 # The orbit-drives target fragment. Include it into an orbit project
-# configuration to add the ghdl and nvc targets:
+# configuration to add the shipped target entries -- 14 targets across
+# the 8 carried tools:
 #
 #   orbit config --push include=/path/to/orbit-drives/config.toml
 #

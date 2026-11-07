@@ -236,6 +236,10 @@ pub enum DriveError {
     Spawn(String),
     /// The run-scoped state could not be reset: usage-class, exit 2.
     Library(String),
+    /// No FPGA part was named on the build face: usage-class, exit 2
+    /// (the CLI gate fires first; the drive carries the same door for
+    /// direct library callers, the cocotb `TestModule` door's shape).
+    Part,
     /// A top failed to synthesize (the build face): findings, exit 1
     /// (the exit honesty is the documented hypothesis -- quartus_map
     /// honest nonzero on failure, UNPROBED).
@@ -267,7 +271,8 @@ impl DriveError {
             DriveError::Blueprint(_)
             | DriveError::NotCarried(_)
             | DriveError::Spawn(_)
-            | DriveError::Library(_) => 2,
+            | DriveError::Library(_)
+            | DriveError::Part => 2,
             DriveError::Synth { .. } | DriveError::Compile { .. } | DriveError::Findings(_) => 1,
         }
     }
@@ -283,6 +288,7 @@ impl fmt::Display for DriveError {
             DriveError::NotCarried(e) => write!(f, "{e}"),
             DriveError::Spawn(message) => write!(f, "{message}"),
             DriveError::Library(message) => write!(f, "{message}"),
+            DriveError::Part => write!(f, "no part to synthesize"),
             DriveError::Synth { top, .. } => write!(f, "the quartus_map synth failed for {top}"),
             DriveError::Compile { stage, .. } => write!(f, "the {stage} compile failed"),
             DriveError::Findings(findings) => {
@@ -299,6 +305,18 @@ impl std::error::Error for DriveError {
             DriveError::NotCarried(e) => Some(e),
             _ => None,
         }
+    }
+}
+
+/// The build face's part door: the DEVICE assignment names the FPGA
+/// fabric the map targets (`--part`), and there is no honest default --
+/// an absent part is the loud usage error, never an empty DEVICE line.
+/// The CLI gate fires first (exit 2 naming the flag); this door keeps
+/// the drive honest for direct library callers.
+fn require_part(request: &Drive) -> Result<&str, DriveError> {
+    match request.part.as_deref() {
+        Some(part) if !part.is_empty() => Ok(part),
+        _ => Err(DriveError::Part),
     }
 }
 
@@ -360,6 +378,14 @@ fn drive_build(
     probe.arg("--version");
     capture(QUARTUS_MAP_BIN, &mut probe).map_err(DriveError::Spawn)?;
 
+    // The part is the face's own requirement: the CLI gate fires first
+    // (exit 2 naming the flag); this door keeps the drive honest for
+    // direct library callers, BEFORE any drive.
+    let part = require_part(request).map_err(|e| {
+        eprintln!("orbit-drives: quartus: error: {e}: pass --part <part>");
+        e
+    })?;
+
     // Both languages ride the .qsf: VHDL entries as VHDL_FILE lines,
     // VLOG and SYSV entries as VERILOG_FILE lines, a custom fileset the
     // loud not-carried face.
@@ -375,11 +401,8 @@ fn drive_build(
     );
 
     for top in &request.tops {
-        println!(
-            "orbit-drives: quartus: {label}: synthesizing {top} for {} (generated .qsf)",
-            request.part.as_deref().unwrap_or("?")
-        );
-        let script = qsf_script(top, request.part.as_deref().unwrap_or(""), &vhdl, &verilog);
+        println!("orbit-drives: quartus: {label}: synthesizing {top} for {part} (generated .qsf)");
+        let script = qsf_script(top, part, &vhdl, &verilog);
         let script_path = format!("{top}.qsf");
         fs::write(&script_path, &script).map_err(|e| {
             let message = format!("cannot write the project settings {script_path}: {e}");
@@ -797,6 +820,7 @@ sim done
             DriveError::Library("cannot wipe".to_string()).exit_code(),
             2
         );
+        assert_eq!(DriveError::Part.exit_code(), 2);
         assert_eq!(
             DriveError::Synth {
                 top: "top".to_string(),
@@ -848,6 +872,33 @@ sim done
         assert_eq!(e.to_string(), "the quartus_map synth failed for top");
         let e = DriveError::Findings(Vec::new());
         assert_eq!(e.to_string(), "0 run(s) carried a finding");
+        // The part door, the CLI gate's message family.
+        assert_eq!(DriveError::Part.to_string(), "no part to synthesize");
+    }
+
+    #[test]
+    fn the_build_face_requires_the_part_for_direct_callers() {
+        // The part door: present and non-empty rides; absent and empty
+        // are the loud usage error. The CLI gate fires first; this door
+        // keeps the direct library caller honest.
+        let request = Drive {
+            blueprint: PathBuf::from("b.tsv"),
+            tops: vec!["top".to_string()],
+            extra: Vec::new(),
+            part: Some("xc7z010clg400-1".to_string()),
+            test_module: None,
+        };
+        assert_eq!(require_part(&request).unwrap(), "xc7z010clg400-1");
+        let absent = Drive {
+            part: None,
+            ..request.clone()
+        };
+        assert!(matches!(require_part(&absent), Err(DriveError::Part)));
+        let empty = Drive {
+            part: Some(String::new()),
+            ..request
+        };
+        assert!(matches!(require_part(&empty), Err(DriveError::Part)));
     }
 
     #[test]

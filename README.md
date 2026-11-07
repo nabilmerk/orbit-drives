@@ -160,7 +160,7 @@ Exits:
 | code | meaning |
 |------|---------|
 | 0 | clean -- every run judged clean and exited zero, or every top elaborated clean |
-| 1 | findings -- a log carried a failure face, a run exited nonzero, or ghdl reported a broken design |
+| 1 | findings -- a log carried a failure face, a run exited nonzero, or the tool reported a broken design |
 | 2 | usage -- bad argv, no top to run, unreadable blueprint, a fileset the drive does not carry |
 
 ## The ghdl drive
@@ -547,7 +547,8 @@ cocotb's own runner IS the compile. The shapes the probes wrote down
   naming the flag; rejected on every other face). The file stem names
   the module the runner imports; its directory rides the spawned
   python's `PYTHONPATH`, because the runner passes its own `sys.path`
-  down to the simulation. The extras ride the script's `test_args` --
+  down to the simulation. The `PYTHONPATH` join is POSIX (`:`) -- v1
+  drives POSIX boxes. The extras ride the script's `test_args` --
   the runner's documented channel to the backing simulator's run argv.
 - **The fileset door is probed shut.** The ghdl backend compiles VHDL
   only -- the runner itself refuses every other source (`ValueError:
@@ -864,8 +865,9 @@ vocabulary, never this one.
   simulation's output appears when the run ends. (yosys's synthesis log
   relays only on failure -- on success the drive reports the netlist,
   not kilobytes of synthesis log.)
-- **License.** The Cargo.toml declares `MIT OR Apache-2.0`; the license
-  texts are held until the maintainer conversation. Orbit itself is
+- **License.** The Cargo.toml declares `MIT OR Apache-2.0`; the LICENSE
+  texts land before any `cargo publish` -- never publish without them
+  (the maintainer conversation's standing rule). Orbit itself is
   GPL-3 -- irrelevant here: a target is a spawned process, not a derived
   work of orbit.
 

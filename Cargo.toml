@@ -5,4 +5,7 @@ edition = "2021"
 rust-version = "1.65"
 description = "Probed failure vocabularies and honest-exit targets for the orbit HDL package manager"
 license = "MIT OR Apache-2.0"
+readme = "README.md"
+keywords = ["hdl", "fpga", "eda", "simulation"]
+categories = ["development-tools", "embedded"]
 repository = "https://github.com/chaseruskin/orbit-drives"
