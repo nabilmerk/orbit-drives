@@ -16,6 +16,9 @@
 //! honest so far as probed (a severity-error run continues but still
 //! exits 1), so there the judge is the second witness, not the only one:
 //! either witness convicts, the same as anywhere else in this crate.
+//! iverilog splits the same two ways within one tool: its compile exits
+//! are honest, but vvp exits 0 on a `$error` call -- ghdl's hole again,
+//! the judge load-bearing there.
 
 use std::fmt;
 use std::str::FromStr;
@@ -98,6 +101,52 @@ pub const NVC_VOCABULARY: &[&str] = &[
     "** Fatal:",
 ];
 
+/// iverilog's failure faces, probed live on Icarus Verilog 12.0 (stable)
+/// (2026-11-07, `iverilog -g2012` + `vvp`): a testbench calling
+/// `$fatal(1, "the design is wrong")` stops the run -- vvp prints
+/// `FATAL: tb_fatal.v:4: the design is wrong` and the indented
+/// `       Time: 1  Scope: tb_fatal` beneath it, and exits 1, honest. But
+/// a `$error("check failed")` call is vvp's hole, probed: vvp prints
+/// `ERROR: tb_error.v:4: check failed` with the same Time/Scope lines,
+/// CONTINUES the simulation -- the testbench's own `$display` output and
+/// the `tb_error.v:6: $finish called at 1 (1s)` line follow -- and EXITS
+/// 0, exactly like bare ghdl's severity-error exit. The exit gate alone
+/// would pass a failing run; the face in the log is the only witness.
+/// The compile faces are recorded too, per the nvc precedent: the parse
+/// face (`broken.v:2: syntax error`, on stderr, exit 2) and the
+/// unknown-root refusal (`error: Unable to find the root module
+/// "nosuch_top" in the Verilog source.`, exit 1) never ride a run log --
+/// the compile step gates on the exit -- but they are probed and pinned.
+/// The gentler neighbors (`WARNING: tb_warn.v:4: check flagged` on a
+/// continuing run that exits 0; `$stop`'s `** VVP Stop(0) **` banner,
+/// also exit 0) are not failures and stay out. Case-exact: vvp spells
+/// its failure faces in uppercase, so a lowercase drift (`fatal:`,
+/// `error:`) is not one of its faces and never judges a log.
+pub const IVERILOG_VOCABULARY: &[&str] = &[
+    // `FATAL: tb_fatal.v:4: the design is wrong` -- the point-of-failure
+    // face of a `$fatal` call (exit 1, run stopped), probed on vvp 12.0.
+    // Uppercase, with the indented `       Time: 1  Scope: tb_fatal`
+    // lines beneath it.
+    "FATAL:",
+    // `ERROR: tb_error.v:4: check failed` -- the face of a `$error` call,
+    // after which vvp CONTINUES and exits 0 (probed live): the face is
+    // the only witness on that failure, the judge's reason to exist for
+    // this tool. Recorded too: the compile faces (`: syntax error` on a
+    // parse error, `Unable to find the root module` on a `-s` naming no
+    // module) never ride a run log -- the compile gates on the exit --
+    // but they are probed and pinned.
+    "ERROR:",
+    // `broken.v:2: syntax error` -- the parse face of a compile the
+    // driver never gets past (exit 2, stderr); the compile step gates on
+    // the exit and is never judged, the face is recorded.
+    ": syntax error",
+    // `error: Unable to find the root module "nosuch_top" in the Verilog
+    // source.` -- the refusal when a `-s` top names no module in the
+    // compiled source (exit 1, probed): the top names are validated at
+    // compile time, so a build drive carries the same check for free.
+    "Unable to find the root module",
+];
+
 /// A tool carrying a probed failure vocabulary.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub enum Tool {
@@ -105,6 +154,9 @@ pub enum Tool {
     Ghdl,
     /// The nvc simulator, `nvc` (VHDL only).
     Nvc,
+    /// The Icarus Verilog compiler and its `vvp` runtime (Verilog/SV
+    /// only).
+    Iverilog,
 }
 
 /// The error for a tool name that resolves to nothing in the registry.
@@ -134,6 +186,7 @@ impl Tool {
         match self {
             Tool::Ghdl => "ghdl",
             Tool::Nvc => "nvc",
+            Tool::Iverilog => "iverilog",
         }
     }
 
@@ -143,6 +196,7 @@ impl Tool {
         match self {
             Tool::Ghdl => GHDL_VOCABULARY,
             Tool::Nvc => NVC_VOCABULARY,
+            Tool::Iverilog => IVERILOG_VOCABULARY,
         }
     }
 }
@@ -164,7 +218,7 @@ impl FromStr for Tool {
 
 /// The registry: every tool carrying a probed failure vocabulary.
 pub fn tools() -> &'static [Tool] {
-    &[Tool::Ghdl, Tool::Nvc]
+    &[Tool::Ghdl, Tool::Nvc, Tool::Iverilog]
 }
 
 /// Judge a tool's log text against its probed failure vocabulary.

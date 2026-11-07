@@ -15,7 +15,10 @@
 //! - [`contracts`]: the per-tool vocabularies and the judge.
 //! - [`ghdl`]: the ghdl target drives -- blueprint in, judged verdict out.
 //! - [`nvc`]: the nvc target drives -- the same shapes, nvc's probed faces.
+//! - [`iverilog`]: the iverilog target drives -- one order-free compile,
+//!   one judged `vvp` run.
 
 pub mod contracts;
 pub mod ghdl;
+pub mod iverilog;
 pub mod nvc;

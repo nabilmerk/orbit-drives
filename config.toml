@@ -8,14 +8,17 @@
 #
 #   orbit test --target ghdl -- -gWIDTH=8 --vcd=waves.vcd
 #   orbit test --target nvc
+#   orbit test --target iverilog -- -vcd=waves.vcd
 #   orbit build --target ghdl-build -- --top gate
 #   orbit build --target nvc-build -- --top gate
+#   orbit build --target verilator-build -- --top gate
 #
 # No --top is needed for the sim faces through `orbit test`: the drive
 # runs the testbench orbit exports as $ORBIT_TB_NAME (through `orbit
 # build`, pass -- --top <name>). Everything after orbit's `--` rides the
-# drive's last tool argv verbatim: the `ghdl -r` / `nvc -r` argv on the
-# sim faces, the `ghdl -e` / `nvc -e` argv on the build faces.
+# drive's last tool argv verbatim: the `ghdl -r` / `nvc -r` / `vvp` argv
+# on the sim faces, the `ghdl -e` / `nvc -e` / `iverilog` compile /
+# verilator build argv on the build faces.
 
 [[target]]
 name = "ghdl"
@@ -36,3 +39,13 @@ command = ["orbit-contracts", "nvc"]
 name = "nvc-build"
 description = "VHDL builds through nvc: blueprint-order analysis with the deferral loop, then elaboration per top -- exit honest, no simulation, nothing judged"
 command = ["orbit-contracts", "nvc-build"]
+
+[[target]]
+name = "iverilog"
+description = "Verilog/SV testbenches through Icarus Verilog: one order-free compile into a snapshot (-g2012, every --top a -s root), then one judged vvp run -- vvp exits 0 on a $error call, so the probed vocabulary is the load-bearing gate"
+command = ["orbit-contracts", "iverilog"]
+
+[[target]]
+name = "iverilog-build"
+description = "Verilog/SV builds through Icarus Verilog: the one order-free compile into a snapshot, exit honest -- no simulation, nothing judged; every --top a -s root, validated by iverilog at compile time"
+command = ["orbit-contracts", "iverilog-build"]

@@ -20,7 +20,7 @@ use std::env;
 use std::path::PathBuf;
 use std::process::ExitCode;
 
-use orbit_contracts::{ghdl, nvc};
+use orbit_contracts::{ghdl, iverilog, nvc};
 
 const USAGE: &str = "\
 orbit-contracts: the probed failure vocabularies and the honest-exit targets for orbit
@@ -40,6 +40,16 @@ SUBCOMMANDS:
     nvc          the same judged sim drive, on nvc's probed failure
                  vocabulary (the nvc sim face)
     nvc-build    the same honest build face, on nvc (the nvc build face)
+    iverilog     compile the blueprint's Verilog into one snapshot, run it
+                 once through vvp, and gate the run log on iverilog's
+                 probed failure vocabulary AND vvp's exit (the iverilog
+                 sim face; vvp exits 0 on a $error call, so the judge is
+                 the load-bearing gate there)
+    iverilog-build
+                 the one order-free compile only (every --top a -s root),
+                 exit honest; no simulation and nothing judged -- the
+                 compile exits are honest, and iverilog validates every
+                 -s root name at compile time (the iverilog build face)
 
 SHARED OPTIONS:
     --blueprint <path>  the TSV blueprint (default: $ORBIT_BLUEPRINT)
@@ -54,11 +64,12 @@ TOPS:
 
 EXTRAS:
     every other argument rides the drive's LAST tool argv verbatim: the
-    `ghdl -r` / `nvc -r` argv on the sim faces, the `ghdl -e` / `nvc -e`
-    argv on the build faces (there is no run to carry them, and a dropped
-    argument would be a silent degradation). Orbit strips its own `--`
-    separator and appends the extras straight onto this argv, so `orbit
-    test --target ghdl -- -gW=4 --vcd=w.vcd` passes both through to ghdl
+    `ghdl -r` / `nvc -r` / `vvp` argv on the sim faces, the `ghdl -e` /
+    `nvc -e` / `iverilog` compile argv on the build faces (there is no
+    run to carry them, and a dropped argument would be a silent
+    degradation). Orbit strips its own `--` separator and appends the
+    extras straight onto this argv, so `orbit test --target ghdl --
+    -gW=4 --vcd=w.vcd` passes both through to ghdl
 
 EXITS:
     0    clean (every run judged clean, or every top elaborated clean)
@@ -84,6 +95,12 @@ enum Subcommand {
     NvcBuild,
     /// `nvc`: nvc's sim face -- the judged drive on nvc's probed faces.
     NvcSim,
+    /// `iverilog-build`: iverilog's build face -- the one order-free
+    /// compile, exit honest, no simulation, nothing judged.
+    IverilogBuild,
+    /// `iverilog`: iverilog's sim face -- the one compile, then the
+    /// judged `vvp` run.
+    IverilogSim,
 }
 
 impl Subcommand {
@@ -91,8 +108,10 @@ impl Subcommand {
     /// drive goes.
     fn mode(self) -> ghdl::Mode {
         match self {
-            Subcommand::GhdlBuild | Subcommand::NvcBuild => ghdl::Mode::Build,
-            Subcommand::GhdlSim | Subcommand::NvcSim => ghdl::Mode::Sim,
+            Subcommand::GhdlBuild | Subcommand::NvcBuild | Subcommand::IverilogBuild => {
+                ghdl::Mode::Build
+            }
+            Subcommand::GhdlSim | Subcommand::NvcSim | Subcommand::IverilogSim => ghdl::Mode::Sim,
         }
     }
 }
@@ -100,7 +119,10 @@ impl Subcommand {
 /// The error for a subcommand name that resolves to nothing: loud,
 /// usage-class, exit 2.
 fn unknown_subcommand(name: &str) -> String {
-    format!("no target named {name:?}: carried subcommands: ghdl, ghdl-build, nvc, nvc-build")
+    format!(
+        "no target named {name:?}: carried subcommands: ghdl, ghdl-build, nvc, nvc-build, \
+         iverilog, iverilog-build"
+    )
 }
 
 /// The argv parse outcome.
@@ -142,6 +164,8 @@ fn parse(argv: &[String]) -> Result<Cli, CliError> {
         "ghdl" => Subcommand::GhdlSim,
         "nvc-build" => Subcommand::NvcBuild,
         "nvc" => Subcommand::NvcSim,
+        "iverilog-build" => Subcommand::IverilogBuild,
+        "iverilog" => Subcommand::IverilogSim,
         other => return Err(CliError(unknown_subcommand(other))),
     };
 
@@ -263,6 +287,15 @@ fn drive_request(request: Request) -> ExitCode {
             request.subcommand.mode(),
         )
         .map_err(|e| e.exit_code()),
+        Subcommand::IverilogBuild | Subcommand::IverilogSim => iverilog::drive(
+            &ghdl::Drive {
+                blueprint,
+                tops,
+                extra: request.extra,
+            },
+            request.subcommand.mode(),
+        )
+        .map_err(|e| e.exit_code()),
     };
     match outcome {
         Ok(()) => ExitCode::SUCCESS,
@@ -370,10 +403,28 @@ mod tests {
         // The error also names what IS carried, so the fix is readable
         // from the message alone.
         assert!(
-            err.0.contains("ghdl-build") && err.0.contains("nvc-build"),
+            err.0.contains("ghdl-build")
+                && err.0.contains("nvc-build")
+                && err.0.contains("iverilog-build"),
             "the error should list the carried subcommands: {}",
             err.0
         );
+    }
+
+    #[test]
+    fn iverilog_build_is_its_own_subcommand_driving_the_build_face() {
+        // The split: `iverilog-build` is a separate target entry that
+        // shares the drive with `iverilog` but stops after the compile.
+        let request = run_of(parse(&argv(&["iverilog-build", "--top", "tb"])).unwrap());
+        assert_eq!(request.subcommand, Subcommand::IverilogBuild);
+        assert_eq!(request.subcommand.mode(), ghdl::Mode::Build);
+    }
+
+    #[test]
+    fn iverilog_drives_the_sim_face() {
+        let request = run_of(parse(&argv(&["iverilog", "--top", "tb"])).unwrap());
+        assert_eq!(request.subcommand, Subcommand::IverilogSim);
+        assert_eq!(request.subcommand.mode(), ghdl::Mode::Sim);
     }
 
     #[test]

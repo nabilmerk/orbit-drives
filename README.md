@@ -59,6 +59,14 @@ Subcommands (one per orbit target entry):
 - `nvc` -- the nvc sim face: the same judged drive on nvc's probed faces.
 - `nvc-build` -- the nvc build face: the same honest shape, no simulation,
   nothing judged.
+- `iverilog` -- the iverilog sim face: one order-free compile into a
+  snapshot, then one judged `vvp` run. vvp exits 0 on a `$error` call
+  (probed live), so the vocabulary is the load-bearing gate here.
+- `iverilog-build` -- the iverilog build face: the one compile only, exit
+  honest. No simulation, no run log, nothing judged: iverilog's compile
+  exits are honest (exit 2 on a parse error, exit 1 on an unknown `-s`
+  root, probed live), and every `--top` is validated against the source
+  at compile time.
 
 Options:
 
@@ -67,11 +75,11 @@ Options:
   With no `--top`, the drive runs `$ORBIT_TB_NAME` (orbit exports it; empty
   in all-mode counts as absent). Exit 2 when neither names a top.
 - anything else -- a tool extra, appended verbatim to the drive's LAST
-  tool argv: each `ghdl -r` / `nvc -r` on the sim faces, each `ghdl -e` /
-  `nvc -e` on the build faces (there is no run to carry them, and a
-  dropped argument would be a silent degradation; an option the
-  elaboration does not speak is the tool's own loud rejection, surfaced
-  as an exit-1 elaborate failure).
+  tool argv: each `ghdl -r` / `nvc -r` / `vvp` on the sim faces, each
+  `ghdl -e` / `nvc -e` / the `iverilog` compile on the build faces
+  (there is no run to carry them, and a dropped argument would be a
+  silent degradation; an option the elaboration does not speak is the
+  tool's own loud rejection, surfaced as an exit-1 failure).
 
 Exits:
 
@@ -132,6 +140,38 @@ probes wrote down:
 - **One `work` library**, like ghdl's v1: the blueprint's library column
   is carried, not mapped.
 
+## The iverilog drive
+
+Two target entries (`iverilog`, `iverilog-build`) share one drive on
+iverilog's probed process. The differences the probes wrote down:
+
+- **No deferral loop, on probed grounds.** iverilog's compile is a single
+  invocation over all files and it is order-free: a
+  consumer-before-provider pair compiled clean (probed live on Icarus
+  Verilog 12.0, 2026-11-07). One compile, no passes -- the machinery the
+  stateful VHDL backends need has nothing to do here.
+- **One compile, one run.** Every requested `--top` rides a `-s` root
+  flag on the single compile, and `vvp` runs the one snapshot once with
+  all the roots; multiple testbenches share one simulation. iverilog
+  validates every `-s` name against the source at compile time
+  (`error: Unable to find the root module "nosuch_top" in the Verilog
+  source.`, exit 1), so an unknown top fails the compile loudly on both
+  faces.
+- **The generation is pinned** (`-g2012`, SystemVerilog-2012): the
+  generation where `$fatal`/`$error` are first-class, and the generation
+  under which the runtime faces were probed. (Probed honestly: iverilog
+  12.0's default generation also accepts `$fatal` at compile time; the
+  pin keeps the judged faces from drifting with the default.)
+- **The snapshot (`orbit-snapshot.vvp`) is wiped before every drive** --
+  the same correctness-before-incrementality stance as the work
+  libraries, though probed honestly: a failed compile exits 1 before the
+  sim face could run a stale snapshot, so the wipe is symmetry here, not
+  load-bearing.
+- **The judge is the load-bearing gate.** vvp exits 0 on a `$error` call
+  (below) -- the bare-ghdl hole again -- so the exit alone would pass a
+  failing run; the face in the log is the only witness. The compile
+  needs no judge: iverilog's compile exits are honest.
+
 ## The probed facts
 
 Every pattern in a vocabulary and every drive fact below was probed live
@@ -182,35 +222,65 @@ ghdl, a testbench's own report note that embeds an nvc face shape
 (`** Error: retrying`) convicts the run -- keep report notes free of
 nvc-face shapes.
 
+### iverilog 12.0 (stable) / vvp 12.0
+
+| face / fact | argv that wrote it | what iverilog/vvp did |
+|------|-----|------|
+| `FATAL: tb_fatal.v:4: the design is wrong` (+ `       Time: 1  Scope: tb_fatal` beneath, on stdout) | `iverilog -g2012 -o f.vvp tb_fatal.v && vvp f.vvp` (same through the drive) | a `$fatal(1, "...")` call stops the run, exit 1 -- honest |
+| `ERROR: tb_error.v:4: check failed` (+ Time/Scope, on stdout) | `iverilog -g2012 -o e.vvp tb_error.v && vvp e.vvp` | a `$error("...")` call: vvp prints the face and **continues** -- the testbench's own `$display` output and `tb_error.v:6: $finish called at 1 (1s)` follow -- and **exits 0**: the bare-ghdl hole again, the judge load-bearing |
+| `WARNING: tb_warn.v:4: check flagged` (+ Time/Scope) | `vvp w.vvp` on a `$warning` call | the gentler severity on a continuing run that **exits 0** -- never judged |
+| `tb_stop.v:5: $stop called at 1 (1s)`, `** VVP Stop(0) **`, `> ** Continue **` | `vvp s.vvp` on a `$stop` call | a `$stop` is an interactive stop, exit 0 -- a legitimate stop, clean, not a crash-door finding (a verilator model's `$stop` aborts instead: below) |
+| `broken.v:2: syntax error` then `I give up.` (stderr) | `iverilog -o snap_broken.vvp broken.v` | the parse-error face, **exit 2**; the compile gates on the exit and is never judged, the face is recorded |
+| `error: Unable to find the root module "nosuch_top" in the Verilog source.` then `1 error(s) during elaboration.` | `iverilog -g2012 -s nosuch_top -o x.vvp tb.v` | the unknown-`-s`-root refusal, **exit 1**: top names are validated at compile time, so the build face carries the check for free |
+| consumer-first compile exits 0 | `iverilog -g2012 -o order.vvp top.v gate.v tb.v` (consumer before provider) | **order-free compile** -- one invocation, no deferral loop; repeated `-s` flags are legal (exit 0) and multiple roots share the one snapshot and the one `vvp` run |
+| `$fatal` accepted at compile, exit 0 | `iverilog -o nog2012.vvp tb_fatal.v` (no `-g`) | iverilog 12.0's default generation also accepts `$fatal` -- the `-g2012` pin keeps the judged faces pinned, not the acceptance |
+
+vvp's runtime failure faces are case-exact capitals on stdout: a
+lowercase drift (`fatal:`, `error:`) is not one of its faces and never
+judges a log. As with the VHDL tools, a testbench's own `$display` that
+embeds a face shape (`ERROR: retrying`) convicts the run -- keep
+`$display` text free of face shapes.
+
 ## Honest limits
 
-- **VHDL only.** `VLOG`, `SYSV`, and custom filesets are a loud exit-2
-  ("not yet carried"), never a silent skip. Mixed-language designs stay out
-  of the contract.
-- **Two vocabularies: ghdl and nvc.** Both are VHDL simulators. Any other
-  tool name is a loud error at the CLI, never a guess.
-- **The library column is carried, not mapped.** Every file analyzes into
-  the tool's `work` library (ghdl's `work-obj08.cf` clock, nvc's `work/`
-  directory); a multi-library orbit project is out of scope for v1.
-- **The standards are pinned** (`--std=08` for ghdl, `--std=2008` for nvc)
-  and cannot be overridden from the argv yet; the extras reach the drive's
-  last step only (`-r` on the sim faces, `-e` on the build faces).
-- **The state is run-scoped, not incremental.** Every drive wipes the work
-  library first. A large design pays a full re-analysis per drive;
-  correctness before incrementality is the v1 stance. (Probed honestly:
-  ghdl's wipe is load-bearing -- a stale library obsoletes its own design;
-  nvc tolerates the stale library, and its wipe is symmetry.)
-- **Bare ghdl only:** a `report ... severity error` statement slips a bare
-  `ghdl -r` (face `(report error)`, exit 0, no judged face). The shipped
-  path catches it: the drive pins `--assert-level=error`, which stops the
-  run and writes the `./<top>:error: report failed` face. nvc has no such
-  hole probed: its severity-error runs continue the simulation but still
-  exit 1.
+- **The filesets are per tool.** The VHDL drives (`ghdl`, `nvc`) carry
+  the `VHDL` fileset only; the iverilog drive carries `VLOG` and `SYSV`
+  (its native filesets) and rejects `VHDL` and custom filesets with a
+  loud exit-2 ("not yet carried"), never a silent skip. Mixed-language
+  designs stay out of the contract.
+- **Four tool names, four vocabularies: ghdl, nvc, iverilog, and the
+  Verilog-native faces they were probed on.** Any other tool name is a
+  loud error at the CLI, never a guess.
+- **The library column is carried, not mapped.** Every file analyzes
+  into the tool's `work` library (ghdl's `work-obj08.cf` clock, nvc's
+  `work/` directory) or compiles into iverilog's one snapshot; a
+  multi-library orbit project is out of scope for v1.
+- **The standards are pinned** (`--std=08` for ghdl, `--std=2008` for
+  nvc, `-g2012` for iverilog) and cannot be overridden from the argv
+  yet; the extras reach the drive's last step only (`-r` on the VHDL sim
+  faces, `vvp` on iverilog's; `-e`/the compile on the build faces).
+- **The state is run-scoped, not incremental.** Every drive wipes its
+  clock first (the work libraries; iverilog's snapshot). A large design
+  pays a full re-analysis per drive; correctness before incrementality
+  is the v1 stance. (Probed honestly: ghdl's wipe is load-bearing -- a
+  stale library obsoletes its own design; nvc tolerates the stale
+  library and iverilog's snapshot cannot be run past a failed compile,
+  so those wipes are symmetry.)
+- **Bare ghdl and bare vvp have holes; the shipped paths catch them.**
+  A `report ... severity error` statement slips a bare `ghdl -r` (face
+  `(report error)`, exit 0, no judged face): the drive pins
+  `--assert-level=error`, which stops the run and writes the
+  `./<top>:error: report failed` face. A `$error` call slips a bare vvp
+  (face `ERROR: ...`, simulation continued, **exit 0**): there the
+  judge's face gate is the only witness, and it is load-bearing. nvc has
+  no such hole probed: its severity-error runs continue the simulation
+  but still exit 1.
 - **A face shape mid-text judges fail.** The vocabularies are case-exact
-  substrings and cannot tell your prose from the tool's: a testbench's own
-  report note that embeds a ghdl face shape (`bus:error: retrying`) or an
-  nvc face shape (`** Error: retrying`) convicts the run. Keep report notes
-  free of face shapes.
+  substrings and cannot tell your prose from the tool's: a testbench's
+  own report note that embeds a ghdl face shape (`bus:error: retrying`),
+  an nvc face shape (`** Error: retrying`), or a vvp face shape
+  (`ERROR: retrying`) convicts the run. Keep report notes and `$display`
+  text free of face shapes.
 - **The run log is captured, then relayed**, not streamed; a long
   simulation's output appears when the run ends.
 - **The tools resolve on PATH.** The orbit target contract carries no
@@ -225,20 +295,22 @@ nvc-face shapes.
 ```sh
 cargo test            # the contract, drive, and argv suites
 cargo test -- --ignored   # + the real-spawn tests: the real binary, real
-                          # ghdl and real nvc, the real orbit spawn shape,
-                          # order-dependent blueprints through the deferral
-                          # loop, judged severity failures, twice in one
-                          # output directory, and the build faces
+                          # ghdl, nvc, and iverilog, the real orbit spawn
+                          # shape, order-dependent blueprints through the
+                          # deferral loop, judged severity failures and
+                          # $fatal/$error calls, twice in one output
+                          # directory, and the build faces
 ```
 
 The contract suite (`tests/contracts.rs`) ports the aquila contract tests
 fixture-for-fixture (upstream: `github.com/chaseruskin/aquila`,
-`tests/test_contracts.py`) and extends them with nvc's probed faces: the
-real failing logs judge fail; the clean logs (including the one mentioning
-"ERROR" mid-text) judge pass; the uppercase (ghdl) and lowercase (nvc)
-drifts never judge; the severity-error faces judge fail; the warning/note
-faces stay clean; and the registry pins exactly the two carried tools. The
-drive suites pin the deferral loop (a consumer-before-provider pair must
-retry), the no-progress stop, the TSV blueprint parse, the crash door (a
-clean log does not green-light a nonzero exit), and the judge gate on fake
-severity-error logs for both tools.
+`tests/test_contracts.py`) and extends them with the probed faces of the
+other tools: the real failing logs judge fail; the clean logs (including
+the one mentioning "ERROR" mid-text) judge pass; the uppercase (ghdl) and
+lowercase (nvc, vvp) drifts never judge; the severity-error and `$error`
+faces judge fail; the warning/note faces stay clean; and the registry
+pins exactly the carried tools. The drive suites pin the deferral loop (a
+consumer-before-provider pair must retry), the no-progress stop, the TSV
+blueprint parse, the crash door (a clean log does not green-light a
+nonzero exit), and the judge gate on fake severity-error logs for both
+VHDL tools.

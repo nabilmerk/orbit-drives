@@ -155,7 +155,7 @@ fn unknown_tool_is_an_error() {
 fn vocabulary_registry() {
     // The registry carries exactly the probed tools, and ghdl's vocabulary
     // is the three probed faces, in probed order.
-    assert_eq!(contracts::tools(), &[Tool::Ghdl, Tool::Nvc]);
+    assert_eq!(contracts::tools(), &[Tool::Ghdl, Tool::Nvc, Tool::Iverilog]);
     assert_eq!(Tool::Ghdl.name(), "ghdl");
     assert_eq!(
         Tool::Ghdl.vocabulary(),
@@ -292,5 +292,160 @@ fn nvc_vocabulary_is_the_three_probed_markers() {
     assert_eq!(
         Tool::Nvc.vocabulary(),
         &["** Failure:", "** Error:", "** Fatal:"]
+    );
+}
+
+// ===== the iverilog vocabulary, probed live on Icarus Verilog 12.0
+// (stable), 2026-11-07 =====
+
+// a real vvp $fatal run (`iverilog -g2012 -o f.vvp tb_fatal.v && vvp
+// f.vvp`): the run stops, exit 1. vvp leads the face with the uppercase
+// `FATAL:` marker and indents the Time/Scope lines beneath it.
+const IV_FATAL_LOG: &str = "\
+FATAL: tb_fatal.v:4: the design is wrong
+       Time: 1  Scope: tb_fatal
+";
+
+// a `$error` call (`iverilog -g2012 -o e.vvp tb_error.v && vvp e.vvp`):
+// vvp prints the ERROR face, CONTINUES the simulation -- the testbench's
+// own $display output and the `$finish called` line follow -- and STILL
+// EXITS 0, exactly like bare ghdl's severity-error exit. The face
+// convicts regardless of the exit; here the exit is no witness at all.
+const IV_ERROR_LOG: &str = "\
+ERROR: tb_error.v:4: check failed
+       Time: 1  Scope: tb_error
+simulation continued
+tb_error.v:6: $finish called at 1 (1s)
+";
+
+// the compile faces, probed live (`iverilog -o snap_broken.vvp
+// broken.v`, exit 2 on stderr; `iverilog -g2012 -s nosuch_top -o x.vvp
+// tb.v`, exit 1). A run log never carries them -- the compile step gates
+// on the exit -- but the faces are probed and recorded, per the nvc
+// precedent.
+const IV_COMPILE_ERROR_LOG: &str = "\
+broken.v:2: syntax error
+I give up.
+";
+
+// the unknown-`-s`-root refusal (`iverilog -g2012 -s nosuch_top -o
+// x.vvp tb.v`, exit 1): the top names are validated at compile time.
+const IV_UNKNOWN_ROOT_LOG: &str = "\
+error: Unable to find the root module \"nosuch_top\" in the Verilog source.
+     : Perhaps ``-s nosuch_top'' is incorrect?
+1 error(s) during elaboration.
+";
+
+// the gentler neighbors, probed live on continuing runs that exit 0:
+// `WARNING:` on a `$warning` call, and `$stop`'s interactive banner
+// (exit 0, unlike a verilator model's $stop) -- continuations and
+// legitimate stops, not failures, so they must never judge a log
+const IV_WARNING_STOP_LOG: &str = "\
+WARNING: tb_warn.v:4: check flagged
+         Time: 1  Scope: tb_warn
+all quiet
+tb_warn.v:6: $finish called at 1 (1s)
+stopping now
+tb_stop.v:5: $stop called at 1 (1s)
+** VVP Stop(0) **
+** Flushing output streams.
+** Current simulation time is 1 ticks.
+> ** Continue **
+";
+
+// a clean run's log: the testbench's own $display output and the
+// $finish line
+const IV_CLEAN_LOG: &str = "\
+sim done
+tb.v:9: $finish called at 1 (1s)
+";
+
+// the probed failure logs with every face drifted to lowercase: not a
+// single one of vvp's faces, since vvp spells its failure faces in
+// uppercase
+const IV_LOWERCASE_DRIFT_LOG: &str = "\
+fatal: tb_fatal.v:4: the design is wrong
+error: tb_error.v:4: check failed
+";
+
+#[test]
+fn iv_fatal_log_judges_fail() {
+    // The probed vvp $fatal log judges FAIL.
+    assert!(!contracts::judge(&Tool::Iverilog, IV_FATAL_LOG));
+}
+
+#[test]
+fn iv_error_log_judges_fail() {
+    // A `$error` call judges FAIL -- and, like bare ghdl's severity
+    // error, vvp continued the simulation and EXITED 0 (probed live on
+    // vvp 12.0, 2026-11-07), so this run convicts on the face alone.
+    // The exit is no witness here; the judge is the load-bearing gate.
+    assert!(!contracts::judge(&Tool::Iverilog, IV_ERROR_LOG));
+}
+
+#[test]
+fn iv_compile_faces_judge_fail() {
+    // The probed compile faces judge FAIL. Recorded for the vocabulary's
+    // completeness; the compile step gates on iverilog's honest exit
+    // (exit 2 on a parse error, exit 1 on an unknown root) and is never
+    // judged.
+    assert!(!contracts::judge(&Tool::Iverilog, IV_COMPILE_ERROR_LOG));
+    assert!(!contracts::judge(&Tool::Iverilog, IV_UNKNOWN_ROOT_LOG));
+}
+
+#[test]
+fn iv_warning_and_stop_stay_clean() {
+    // The probed continuation faces (`WARNING:`) and the `$stop` banner
+    // judge PASS: they are not failures, and a $stop is a legitimate
+    // stop (exit 0).
+    assert!(contracts::judge(&Tool::Iverilog, IV_WARNING_STOP_LOG));
+}
+
+#[test]
+fn iv_clean_log_judges_pass() {
+    // A clean vvp log judges PASS.
+    assert!(contracts::judge(&Tool::Iverilog, IV_CLEAN_LOG));
+}
+
+#[test]
+fn iv_lowercase_drift_never_matches() {
+    // A lowercase drift of every vvp failure face judges PASS: vvp
+    // spells its failure faces in uppercase, case-exactly.
+    assert!(contracts::judge(&Tool::Iverilog, IV_LOWERCASE_DRIFT_LOG));
+}
+
+#[test]
+fn iv_each_face_alone_judges_fail() {
+    // Each of iverilog's faces judges FAIL on its own, in an otherwise
+    // clean log.
+    for face in Tool::Iverilog.vocabulary() {
+        let log = format!("tb.v:9: $finish called at 1 (1s)\nnoise {face} tail\n");
+        assert!(
+            !contracts::judge(&Tool::Iverilog, &log),
+            "face {face:?} did not judge its log"
+        );
+    }
+}
+
+#[test]
+fn iv_empty_log_judges_pass() {
+    // An empty log carries no failure face, so it judges PASS.
+    assert!(contracts::judge(&Tool::Iverilog, ""));
+}
+
+#[test]
+fn iv_vocabulary_is_the_four_probed_faces() {
+    // iverilog's vocabulary is the four probed faces, in probed order:
+    // the two runtime faces first (the judged faces), then the two
+    // compile faces (recorded, never judged in practice).
+    assert_eq!(Tool::Iverilog.name(), "iverilog");
+    assert_eq!(
+        Tool::Iverilog.vocabulary(),
+        &[
+            "FATAL:",
+            "ERROR:",
+            ": syntax error",
+            "Unable to find the root module",
+        ]
     );
 }
