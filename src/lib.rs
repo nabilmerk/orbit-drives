@@ -18,7 +18,9 @@
 //!   join, the verbatim block relays.
 //! - [`contracts`]: the per-tool vocabularies and the judge.
 //! - [`ghdl`]: the ghdl target drives -- blueprint in, judged verdict out.
-//! - [`nvc`]: the nvc target drives -- the same shapes, nvc's probed faces.
+//! - [`nvc`]: the nvc target drives -- the same shapes, nvc's probed faces,
+//!   the one drive that consumes the blueprint's library column (the §25
+//!   multi-library face).
 //! - [`iverilog`]: the iverilog target drives -- one order-free compile,
 //!   one judged `vvp` run.
 //! - [`verilator`]: the verilator target drives -- one lint, per-top
@@ -54,6 +56,6 @@ pub mod vivado;
 pub mod yosys;
 
 pub use blueprint::{
-    parse_blueprint, quartus_files, verilog_only, vhdl_only, vivado_files, BlueprintError, Drive,
-    Entry, MalformedLine, Mode, NotCarried,
+    parse_blueprint, quartus_files, verilog_only, vhdl_entries, vhdl_only, vivado_files,
+    BlueprintError, Drive, Entry, MalformedLine, Mode, NotCarried,
 };

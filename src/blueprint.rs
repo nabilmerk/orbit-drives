@@ -21,8 +21,12 @@ pub struct Entry {
     /// The fileset orbit filed the file under (`VHDL`, `VLOG`, `SYSV`, or
     /// a custom fileset).
     pub fileset: String,
-    /// The orbit library the file belongs to. Carried but not yet mapped:
-    /// v1 analyzes every file into the tool's `work` library.
+    /// The orbit library the file belongs to -- the owning project's HDL
+    /// library name (orbit defaults it to the project's own name, not to
+    /// any tool's `work`). Consumed verbatim by the nvc drive's per-file
+    /// `--work` pin (the §25 multi-library face, probed live on nvc
+    /// 1.23.0); the other drives still analyze every file into their
+    /// tool's single default library.
     pub library: String,
     /// The file path, as the blueprint wrote it.
     pub path: PathBuf,
@@ -218,22 +222,37 @@ impl fmt::Display for NotCarried {
 
 impl std::error::Error for NotCarried {}
 
-/// The VHDL files of the blueprint, in blueprint order.
+/// The VHDL entries of the blueprint, in blueprint order, libraries
+/// attached: the shape the nvc drive's multi-library face consumes -- each
+/// file analyzed into the library its own row declares (`--work=
+/// <entry.library>`), so the deferral loop stays per-file and cross-library
+/// references defer across libraries exactly as they do within one.
 ///
 /// Every non-VHDL entry -- `VLOG`, `SYSV`, a custom fileset -- is rejected
-/// loudly: mixed-language designs stay outside the VHDL drives' contract,
-/// and a silent skip would leave files the user believes were simulated.
-pub fn vhdl_only(entries: &[Entry]) -> Result<Vec<PathBuf>, NotCarried> {
+/// loudly, through the same shared [`NotCarried`] refusal as
+/// [`vhdl_only`]: mixed-language designs stay outside the VHDL drives'
+/// contract, and a silent skip would leave files the user believes were
+/// simulated.
+pub fn vhdl_entries(entries: &[Entry]) -> Result<Vec<Entry>, NotCarried> {
     let foreign: Vec<Entry> = entries
         .iter()
         .filter(|entry| entry.fileset != "VHDL")
         .cloned()
         .collect();
     if foreign.is_empty() {
-        Ok(entries.iter().map(|entry| entry.path.clone()).collect())
+        Ok(entries.to_vec())
     } else {
         Err(NotCarried { entries: foreign })
     }
+}
+
+/// The VHDL files of the blueprint, in blueprint order.
+///
+/// Every non-VHDL entry -- `VLOG`, `SYSV`, a custom fileset -- is rejected
+/// loudly: mixed-language designs stay outside the VHDL drives' contract,
+/// and a silent skip would leave files the user believes were simulated.
+pub fn vhdl_only(entries: &[Entry]) -> Result<Vec<PathBuf>, NotCarried> {
+    vhdl_entries(entries).map(|carried| carried.iter().map(|entry| entry.path.clone()).collect())
 }
 
 /// The Verilog files of the blueprint, in blueprint order.
@@ -391,6 +410,24 @@ mod tests {
         assert_eq!(err.entries[1].fileset, "SYSV");
         let carried = parse_blueprint("VHDL\twork\t./a.vhd\n").unwrap();
         assert_eq!(vhdl_only(&carried).unwrap(), vec![PathBuf::from("./a.vhd")]);
+    }
+
+    #[test]
+    fn the_entry_filter_hands_the_drive_both_paths_and_libraries() {
+        // The nvc drive's multi-library face: the carried entries carry
+        // their blueprint library beside their path, in blueprint order.
+        let entries = parse_blueprint("VHDL\tgrlib\t./pkg.vhd\nVHDL\twork\t./tb.vhd\n").unwrap();
+        let carried = vhdl_entries(&entries).unwrap();
+        assert_eq!(carried.len(), 2);
+        assert_eq!(carried[0].library, "grlib");
+        assert_eq!(carried[0].path, PathBuf::from("./pkg.vhd"));
+        assert_eq!(carried[1].library, "work");
+        assert_eq!(carried[1].path, PathBuf::from("./tb.vhd"));
+        // The refusal is the shared one, byte-for-byte the paths-only
+        // face's.
+        let err = vhdl_entries(&parse_blueprint("VLOG\twork\t./b.v\n").unwrap()).unwrap_err();
+        assert_eq!(err.entries.len(), 1);
+        assert_eq!(err.entries[0].fileset, "VLOG");
     }
 
     #[test]

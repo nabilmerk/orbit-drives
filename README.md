@@ -193,26 +193,74 @@ through the judge.
 
 Two target entries (`nvc`, `nvc-build`) share one drive with the same
 shapes as ghdl's -- blueprint, deferral-loop analysis, elaboration per
-top, judged run -- on nvc's probed process and faces. The differences the
-probes wrote down:
+top, judged run -- on nvc's probed process and faces, consuming the
+blueprint's library column (the §25 multi-library face, probed live on
+nvc 1.23.0, 2026-11-07). The differences the probes wrote down:
 
-- **The argv is option-first, the opposite of ghdl.** `--std=2008` is a
-  global option and must LEAD: `nvc --std=2008 -a f.vhd`. After the
-  command, nvc answers `** Fatal: unrecognised analysis option
-  --std=2008` (exit 1). Run options are legal after the toplevel unit
-  (`nvc --std=2008 -r top --stop-time=1ns`, probed clean), so the extras
-  ride there.
-- **The library state is a `work/` directory**, not ghdl's clock file,
-  and the drive wipes it before every analysis -- the same
-  correctness-before-incrementality stance as ghdl, though probed
-  honestly: nvc tolerates re-analysis in a stale library without ghdl's
-  obsoleted-design refusal, so the wipe is symmetry here, not
-  load-bearing.
+- **The argv is option-first, the opposite of ghdl.** `--std=2008`,
+  `-L .`, and `--work=<library>` are GLOBAL options and must LEAD:
+  `nvc --std=2008 -L . --work=grlib -a f.vhd`. After the command, nvc
+  answers `** Fatal: unrecognised analysis option --std=2008` (exit 1).
+  Run options are legal after the toplevel unit (`nvc --std=2008 -L .
+  --work=work -r top --stop-time=1ns`, probed clean), so the extras ride
+  there.
+- **Multi-library: the library column is load-bearing.** Every analyze
+  rides `--work=<entry.library>` -- the blueprint's library column
+  consumed verbatim (the §25 ruling: the library name is the project's
+  declared name, orbit's planner is its source of truth -- and orbit
+  defaults a project's library to the project's NAME, not to any tool's
+  `work`). nvc creates one directory per analyzed library in the output
+  directory (`grlib/`, `work/`, ...), and EVERY nvc spawn -- analyze,
+  elaborate, run -- carries `-L .` so a consumer's `library <other>;`
+  clause resolves against them: without it the search path is nvc's
+  install dirs alone, and the analyze dies on `** Error: library
+  <OTHER> not found`. Libraries analyze in ANY blueprint order -- the
+  search path makes cross-library references resolve once both sides are
+  analyzed, which is what the deferral loop (unchanged, per-file) rides:
+  a consumer defers across libraries exactly as it defers within one.
+- **The elaborate and run argv pin the top's library** (`--work=<lib>`),
+  because nvc's bare-top commands search the WORK library ONLY (`-e tb`
+  with the top analyzed into any other library: `** Fatal: cannot find
+  unit WORK.TB in library WORK`, exit 1, probed -- even with `-L .`).
+  The resolution, loudest voice first: `$ORBIT_PROJECT_LIBRARY` (orbit
+  sets it on every spawned target to the working project's library; the
+  designated testbench is a working-project file); then the blueprint's
+  single carried library (direct invocation without orbit); then nvc's
+  default `work` -- a guess that cannot pass silently, because the wiped
+  `work` library cannot hold a stale unit: a wrong guess dies loudly on
+  nvc's own elaboration refusal.
+- **The library state is per-library directories, and the wipe takes
+  every one of them**: the drive removes each directory in the output
+  directory carrying nvc's own `_NVC_LIB` marker (nvc writes it even
+  when the analysis into the fresh library fails, probed -- it is nvc's
+  own library-recognition rule). The scan, not the blueprint's library
+  list, is what makes it honest: a library a PREVIOUS drive analyzed but
+  this blueprint no longer names must die too, or a `library <other>;`
+  clause would silently resolve against its stale units. Unlike ghdl's,
+  the wipe was never load-bearing against nvc itself (nvc tolerates
+  stale-library re-analysis, probed) -- with libraries in the blueprint
+  it IS load-bearing against the drive's own resolution.
+- **A library no blueprint row populates fails loudly at analyze.** A
+  design naming a THIRD library (not one the planner carried) dies on
+  `** Error: library <OTHER> not found` / `** Fatal: required library
+  <OTHER> not found`, the deferral loop exhausts with no progress, and
+  the residual stderr relays both faces verbatim, exit 1 -- never a
+  silent blackbox degradation. Every library the blueprint carries is
+  analyzed, so this face cannot fire for one.
 - **No `--assert-level` analogue is pinned.** None is needed: nvc's run
   exits probed honest on every failure face (below), and the judge gates
   the log regardless.
-- **One `work` library**, like ghdl's v1: the blueprint's library column
-  is carried, not mapped.
+- **The argv shape changed with the multi-library face** (2026-11-07):
+  every project's argv now carries `-L .` and `--work=<library>` -- a
+  depless single-library project's analyze went from
+  `nvc --std=2008 -a f.vhd` to `nvc --std=2008 -L . --work=work -a
+  f.vhd`, its elaboration from `nvc --std=2008 -e top` to `nvc
+  --std=2008 -L . --work=work -e top`, its run likewise. Nothing about
+  the judged faces moved with it; the probed sequences below carry the
+  new argv verbatim, and the single-library live tests drive the new
+  shape end to end.
+- **VHDL only**, like every VHDL drive: the `VLOG`/`SYSV` filesets are
+  the loud exit-2 refusal, and nvc's Verilog face is not carried.
 
 ## The iverilog drive
 
@@ -602,7 +650,13 @@ nothing ghdl writes, and false-failed clean logs.
 | `** Error: design unit GATE not found in library WORK` | `nvc --std=2008 -a top.vhd` with `gate.vhd` unanalyzed | the order-dependence face: the consumer cannot analyze before its provider, exit 1 -- and the failed analysis does not poison the library: provider then consumer both analyze after (the deferral loop's shape, probed live) |
 | `** Fatal: cannot find unit WORK.TB_NOSUCH in library WORK` | `nvc --std=2008 -e tb_nosuch` | the elaboration refusal when the top names no analyzed unit, exit 1 |
 | `** Fatal: unrecognised analysis option --std=2008` | `nvc -a --std=2008 f.vhd` | nvc's argv is option-FIRST: the global `--std` leads and the command follows -- the opposite of ghdl's command-first shape |
-| re-analysis, elaboration and run all exit 0 | a second drive in one output directory: provider then consumer re-analyzed, `-e`, `-r` | nvc tolerates stale-library re-analysis without ghdl's obsoleted-design refusal -- the wipe is symmetry here, not load-bearing |
+| exit 0 end to end, `** Note: 0ms+0: SIM PASSED` relayed, two libraries | per-file `nvc --std=2008 -L . --work=grlib -a pkg.vhd` / `--work=work -a gate.vhd` / `--work=work -a tb.vhd` (consumers FIRST, in any order); then `nvc --std=2008 -L . --work=work -e tb`; then `nvc --std=2008 -L . --work=work -r tb` | **the multi-library face**: one directory per `--work` library in the cwd; the consumers' `library grlib;` resolves at analyze against `grlib/` because `-L .` puts the cwd on the search path; elab/run pin the top's library and resolve the other library's units through the search path |
+| `** Error: library GRLIB not found` (+ caret block, `= Note: library search path contains: ., ...`) then `** Fatal: required library GRLIB not found` (+ the `add additional directories ... -L` note) | `nvc --std=2008 --work=work -a gate.vhd` with no `-L` on a `library grlib;` consumer; `nvc --std=2008 -e tb` with `grlib/` in the cwd but unsearched | **the missing-search-path face**, two markers on ONE failed spawn, exit 1: the reader's `** Error:` and the process-level `** Fatal:`; the note lists the search path it tried and names the `-L` fix -- why every drive spawn carries `-L .` |
+| `** Error: library GRLIB not found` on the consumer-first analyze, then provider-then-consumer all exit 0 | blueprint order tb, gate (both `library grlib;`), pkg (into `--work=grlib`): pass 1 fails both consumers on the ABSENT `grlib/` directory while pkg creates it; passes 2-3 retire gate then tb | **the cross-library deferral face**: a library directory that does not exist yet reads as the library-not-found face, and the retry resolves -- the deferral loop needs no change to defer across libraries (the drive's multi-library blueprint runs `3 file(s) analyzed in 3 pass(es)`, probed through the drive) |
+| `** Fatal: cannot find unit WORK.TB in library WORK` | `nvc --std=2008 -L . -e tb` with tb analyzed into `--work=grlib` | **the bare-top WORK-only search**, exit 1: even with the library's directory on the search path, a bare top is searched in WORK alone -- why the drive pins `--work=<the top's library>` on every elaborate and run |
+| exit 0, `** Note: 0ms+0: SIM PASSED` | `nvc --std=2008 -L . --work=grlib -e tb; nvc --std=2008 -L . --work=grlib -r tb` (tb analyzed into grlib, nothing in work) | the pinned-library elab/run: the top resolves in its OWN library, what it references through the search path |
+| `<lib>/_NVC_LIB` written even on a failed analyze | `nvc --std=2008 --work=freshlib -a broken.vhd` (syntax error, exit 1); `nvc --std=2008 --work=optfail -a --bogus broken.vhd` (option error, exit 1) | every directory nvc makes a work library carries the `_NVC_LIB` marker file (nvc's own recognition rule refuses a directory without it) -- the drive's wipe keys on it |
+| re-analysis, elaboration and run all exit 0 | a second drive in one output directory: provider then consumer re-analyzed, `-e`, `-r` | nvc tolerates stale-library re-analysis without ghdl's obsoleted-design refusal -- against nvc itself the wipe is symmetry, not load-bearing; on a multi-library blueprint it IS load-bearing (a library this blueprint no longer analyzes must not stay resolvable) |
 
 nvc's markers are case-exact capitals: a lowercase drift (`** error:`,
 `** failure:`) is not one of its faces and never judges a log. And as with
@@ -771,11 +825,19 @@ vocabulary, never this one.
   - **the build face's state** (quartus_map's compilation database): a
     stale database could make a re-drive incremental; the first probed
     re-drive decides whether the wipe list grows.
-- **The library column is carried, not mapped.** Every file analyzes
-  into the tool's `work` library (ghdl's `work-obj08.cf` clock, nvc's
-  `work/` directory), compiles into iverilog's one snapshot, or lints
-  and builds as one verilator fileset; a multi-library orbit project is
-  out of scope for v1.
+- **The library column is load-bearing on nvc, carried on the rest.**
+  The nvc drive consumes the blueprint's library column verbatim --
+  every file analyzed into `--work=<entry.library>` (the §25
+  multi-library face, probed live on nvc 1.23.0, 2026-11-07), every
+  spawn carrying `-L .`, the wipe taking every `_NVC_LIB`-marked
+  directory, and the elaborate/run argv pinning the top's library
+  (resolved from `$ORBIT_PROJECT_LIBRARY`, then the blueprint's single
+  carried library, then nvc's default `work`). Every OTHER drive still
+  maps nothing: ghdl analyzes into its one `work-obj08.cf` clock,
+  iverilog compiles into its one snapshot, verilator lints and builds
+  one fileset, and the vivado and quartus faces compile their filesets
+  as given -- a multi-library orbit project on those drives stays out
+  of scope for v1.
 - **The standards are pinned where the tools pin them** (`--std=08` for
   ghdl, `--std=2008` for nvc, `-g2012` for iverilog, `-2008` for the
   quartus sim face's vcom -- vcom's spelling of the same VHDL-2008 pin;
@@ -788,14 +850,19 @@ vocabulary, never this one.
   runner's `test_args` on cocotb's; the elaboration / compile / build
   argv on the build faces).
 - **The state is run-scoped, not incremental.** Every drive wipes its
-  clock first (the work libraries; iverilog's snapshot; verilator's
+  clock first (nvc's: every `_NVC_LIB`-marked directory in the output
+  directory -- the whole per-library set, not a named one; ghdl's
+  `work-obj08.cf`; iverilog's snapshot; verilator's
   `obj_dir`; yosys's `netlists/`; vivado's `xsim.dir/` and, on the build
   face, its `netlists/`; the quartus sim face's `work/` +
   `modelsim.ini`, DOCUMENTED-ONLY; cocotb's `sim_build/`). A large
   design pays a full re-analysis per drive; correctness before
   incrementality is the v1 stance. (Probed honestly: ghdl's wipe is
-  load-bearing -- a stale library obsoletes its own design; nvc
-  tolerates the stale library, iverilog's snapshot cannot be run past a
+  load-bearing -- a stale library obsoletes its own design -- and nvc's
+  is load-bearing on a multi-library blueprint, where a library the
+  blueprint no longer analyzes must not stay resolvable, even though
+  nvc itself tolerates re-analysis in a stale library; iverilog's
+  snapshot cannot be run past a
   failed compile, verilator's `--build` regenerates its intermediates, a
   failed yosys synth exits before its netlist could be mistaken for
   fresh, a failed vivado compile or elaboration exits before the sim
@@ -879,7 +946,10 @@ cargo test -- --ignored   # + the real-spawn tests: the real binary, real
                           # ghdl, nvc, iverilog, verilator, yosys, and
                           # vivado, the real orbit spawn shape,
                           # order-dependent blueprints through the
-                          # deferral loop, judged severity failures and
+                          # deferral loop, the nvc two-library blueprint
+                          # judged end to end (and a project whose
+                          # library is its own name, pinned on the elab
+                          # and run argv), judged severity failures and
                           # $fatal/$error calls, twice in one output
                           # directory, the build faces, and the vivado
                           # lying-exit gate. The quartus and cocotb
@@ -902,7 +972,10 @@ case drift or a marker mid-line never judges; the severity-error,
 space-padded row face judges; the warning/note faces stay clean; and the
 registry pins exactly the carried tools. The drive suites pin the
 deferral loop (a consumer-before-provider pair must retry), the
-no-progress stop, the TSV blueprint parse, the crash door (a clean log
+no-progress stop, the TSV blueprint parse, the nvc global argv block
+(`--std`, `-L .`, `--work=<library>`, pinned verbatim), the top's
+library resolution ladder (orbit's env, the single carried library,
+nvc's default), the `_NVC_LIB`-scoped wipe, the crash door (a clean log
 does not green-light a nonzero exit), the Tcl catch-guard shape, the
 generated runner-script shape, and the judge gate on fake severity-error
 logs for the VHDL tools.

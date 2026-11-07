@@ -1,21 +1,27 @@
 //! The nvc target drive: the same shapes as the ghdl drive, nvc's probed
-//! faces.
+//! faces -- and the one drive that consumes the blueprint's library
+//! column.
 //!
 //! The drive reads the blueprint orbit wrote for the target (the TSV plan:
 //! one `fileset<TAB>library<TAB>filepath` line per collected file),
-//! analyzes the VHDL entries in blueprint order with the deferral loop,
-//! and elaborates every requested top; the sim face then runs each top and
-//! judges the run log against nvc's probed failure vocabulary. Two orbit
-//! targets share this drive, split by [`Mode`]: `nvc-build` (analyze +
-//! elaborate per top, exit honest, no simulation, nothing judged) and
-//! `nvc` (elaborate, run, judge).
+//! analyzes the VHDL entries in blueprint order with the deferral loop --
+//! each file into the library its own row declares (`--work=
+//! <entry.library>`, the §25 multi-library face, probed live on nvc
+//! 1.23.0) -- and elaborates every requested top; the sim face then runs
+//! each top and judges the run log against nvc's probed failure
+//! vocabulary. EVERY nvc spawn carries `-L .`: nvc creates one directory
+//! per analyzed library in the output directory, and a consumer's
+//! `library <other>;` clause resolves only when that directory is on the
+//! search path. Two orbit targets share this drive, split by [`Mode`]:
+//! `nvc-build` (analyze + elaborate per top, exit honest, no simulation,
+//! nothing judged) and `nvc` (elaborate, run, judge).
 //!
 //! The TSV blueprint is orbit's plan format and the deferral loop is
 //! order-independence machinery, not ghdl's: the blueprint machinery
 //! lives in [`crate::blueprint`], and the deferral loop lives in
 //! [`crate::ghdl`] with the first drive that carried it -- both drives
 //! share them. Everything that is genuinely nvc's -- the argv shape, the
-//! library state, the faces -- is probed and pinned here.
+//! per-library state, the faces -- is probed and pinned here.
 //!
 //! The judge gates the sim face as second witness, not first: nvc's exits
 //! probed honest across every failure face (a `severity error` run
@@ -24,11 +30,11 @@
 
 use std::fmt;
 use std::fs;
-use std::path::Path;
+use std::path::{Path, PathBuf};
 use std::process::Command;
 
 use crate::blueprint::{
-    parse_blueprint, plan_note, vhdl_only, BlueprintError, Drive, Mode, NotCarried,
+    parse_blueprint, plan_note, vhdl_entries, BlueprintError, Drive, Entry, Mode, NotCarried,
 };
 use crate::contracts::{self, Tool};
 use crate::ghdl::{self, AnalyzeReport};
@@ -47,21 +53,52 @@ pub const NVC_BIN: &str = "nvc";
 /// toplevel unit (`nvc --std=2008 -r top --stop-time=1ns` probed clean).
 pub const STD: &str = "--std=2008";
 
-/// The work library directory nvc analyzes into (`work/`, relative to the
-/// working directory). It is a DIRECTORY, not ghdl's single clock file,
-/// and nvc creates it even for an analysis that fails on its first
-/// option; elaboration leaves nothing beside it (nvc 1.23 stores the
-/// elaborated unit inside the library).
+/// The library search path every nvc spawn carries: `-L .` -- the output
+/// directory where nvc creates one directory per analyzed library. A
+/// consumer's `library <other>;` clause resolves ONLY when the other
+/// library's directory is on the search path: without `-L .` the path is
+/// nvc's install dirs alone, and the analyze dies on `** Error: library
+/// <OTHER> not found` above `** Fatal: required library <OTHER> not
+/// found`, with the search-path note naming the `-L` fix (probed live on
+/// nvc 1.23.0, 2026-11-07). Probed honestly: `-L .` is accepted on every
+/// spawn -- analyze, elaborate, run -- including the first one, before
+/// any library directory exists.
+pub const SEARCH_PATH_ARGS: [&str; 2] = ["-L", "."];
+
+/// nvc's own marker file inside every work library directory it creates
+/// (`<lib>/_NVC_LIB`, carrying nvc's version string). nvc itself refuses
+/// to recognize a directory as a library without it, and it is written
+/// even when the analysis into the fresh library fails -- probed on nvc
+/// 1.23.0 (2026-11-07): a syntax-broken analyze into `--work=freshlib`
+/// and an option-error one (`--work=optfail -a --bogus`) both leave
+/// `<lib>/_NVC_LIB` behind.
 ///
-/// Orbit's output directory persists across runs, and v1's stance is
-/// correctness before incrementality: every drive starts from an empty
-/// library. Probed honestly: nvc, unlike ghdl, tolerates re-analysis in a
-/// stale library without the obsoleted-design refusal (a second drive of
-/// provider-then-consumer analysis, elaboration and run exited 0 across
-/// the board on nvc 1.23.0, 2026-11-07), so this wipe is not load-bearing
-/// here the way ghdl's is -- it exists so both drives keep one stance and
-/// every drive starts from a known-clean clock.
-pub const WORK_LIBRARY_DIR: &str = "work";
+/// The drive's state wipe keys on this marker: every directory in the
+/// output directory carrying it is one of nvc's per-library directories,
+/// and every one of them dies with the drive start -- the same
+/// correctness-before-incrementality stance as ghdl, extended to the
+/// multi-library face. The scan -- not the blueprint's library list --
+/// is what makes it honest: a library a PREVIOUS drive analyzed but this
+/// blueprint no longer names must die too, or a `library <other>;`
+/// clause would silently resolve against its stale units. Probed
+/// honestly: nvc tolerates re-analysis in a stale library without the
+/// obsoleted-design refusal (nvc 1.23.0, 2026-11-07), so the wipe is not
+/// load-bearing against nvc itself the way ghdl's is -- it is
+/// load-bearing against the drive's own multi-library resolution.
+pub const LIBRARY_MARKER: &str = "_NVC_LIB";
+
+/// nvc's default work library name (`work`), and the drive's last resort
+/// when it must name the library that holds the top: see [`top_library`].
+pub const DEFAULT_LIBRARY: &str = "work";
+
+/// The env var orbit sets on every spawned target
+/// (`ORBIT_PROJECT_LIBRARY`): the working project's HDL library name --
+/// the same name orbit's planner writes into the blueprint's library
+/// column for the project's own files, which is where the designated
+/// testbench lives. The planner's voice, not the drive's guess: orbit
+/// defaults a project's library to the project's NAME, so under orbit
+/// this is generally NOT nvc's `work`.
+pub const PROJECT_LIBRARY_ENV: &str = "ORBIT_PROJECT_LIBRARY";
 
 /// The record of one top's run: what nvc exited and what it wrote.
 #[derive(Clone, Debug, PartialEq, Eq)]
@@ -109,7 +146,7 @@ pub enum DriveError {
     NotCarried(NotCarried),
     /// nvc could not be spawned at all: usage-class, exit 2.
     Spawn(String),
-    /// The stale work library could not be wiped: usage-class, exit 2.
+    /// The stale work libraries could not be wiped: usage-class, exit 2.
     Library(String),
     /// Files never analyzed after the deferral loop exhausted: findings,
     /// exit 1.
@@ -181,27 +218,23 @@ impl std::error::Error for DriveError {
 /// everything past it is nvc's own probed shape.
 ///
 /// Orbit spawns this process with the working directory set to the
-/// target's output directory, so the blueprint's relative paths and nvc's
-/// work library land there. All progress and diagnostics are printed
-/// here; the returned error only picks the exit code. The mode picks how
-/// far the drive goes: `Build` stops after the elaborations (no run, no
-/// log, nothing judged); `Sim` runs each elaborated top and judges it.
+/// target's output directory, so the blueprint's relative paths, the
+/// blueprint itself, and nvc's per-library directories land there. All
+/// progress and diagnostics are printed here; the returned error only
+/// picks the exit code. The mode picks how far the drive goes: `Build`
+/// stops after the elaborations (no run, no log, nothing judged); `Sim`
+/// runs each elaborated top and judges it.
 pub fn drive(request: &Drive, mode: Mode) -> Result<(), DriveError> {
     let label = mode.label();
     // nvc must be spawnable before anything else, so a missing binary is
     // a loud usage error instead of a deferral-loop residual.
     capture(NVC_BIN, Command::new(NVC_BIN).arg("--version")).map_err(DriveError::Spawn)?;
 
-    // Run-scoped library state: see `WORK_LIBRARY_DIR`. Every drive
-    // starts from an empty library, so a second run in the same
-    // persistent output directory starts from a known-clean clock.
-    if let Err(e) = fs::remove_dir_all(WORK_LIBRARY_DIR) {
-        if e.kind() != std::io::ErrorKind::NotFound {
-            let message = format!("cannot wipe the stale work library {WORK_LIBRARY_DIR}/: {e}");
-            eprintln!("orbit-drives: nvc: error: {message}");
-            return Err(DriveError::Library(message));
-        }
-    }
+    // Run-scoped library state: see `LIBRARY_MARKER`. Every directory nvc
+    // has ever made a work library in this output directory dies with the
+    // drive start, so a second run starts from a known-clean clock and no
+    // consumer resolves a library this blueprint no longer analyzes.
+    wipe_libraries(Path::new(".")).map_err(DriveError::Library)?;
 
     if let Some(note) = plan_note("nvc", std::env::var("ORBIT_BLUEPRINT_PLAN").ok().as_deref()) {
         eprintln!("{note}");
@@ -220,16 +253,29 @@ pub fn drive(request: &Drive, mode: Mode) -> Result<(), DriveError> {
         eprintln!("orbit-drives: nvc: error: {e}");
         DriveError::Blueprint(e)
     })?;
-    let files = vhdl_only(&entries).map_err(|e| {
+    let carried = vhdl_entries(&entries).map_err(|e| {
         eprintln!("orbit-drives: nvc: error: {e}");
         DriveError::NotCarried(e)
     })?;
 
     println!(
         "orbit-drives: nvc: {label}: analyzing {} VHDL file(s) in blueprint order",
-        files.len()
+        carried.len()
     );
-    let report = ghdl::analyze_with_deferral(&files, analyze_once);
+    let paths: Vec<PathBuf> = carried.iter().map(|entry| entry.path.clone()).collect();
+    let report = ghdl::analyze_with_deferral(&paths, |file| {
+        // Each file analyzes into the library its own blueprint row
+        // declares -- the §25 face, the column consumed verbatim. The
+        // deferral loop hands back exactly the paths it was given, and
+        // those came from these entries: the lookup cannot miss.
+        let library = carried
+            .iter()
+            .find(|entry| entry.path == file)
+            .expect("the deferral loop hands back the blueprint's own paths")
+            .library
+            .clone();
+        analyze_once(file, &library)
+    });
     println!(
         "orbit-drives: nvc: {label}: {} file(s) analyzed in {} pass(es)",
         report.analyzed.len(),
@@ -251,15 +297,20 @@ pub fn drive(request: &Drive, mode: Mode) -> Result<(), DriveError> {
         return Err(DriveError::Analyze(report));
     }
 
+    // The library that holds the tops: see `top_library`. Resolved once
+    // -- it does not vary per top.
+    let top_library = top_library(std::env::var(PROJECT_LIBRARY_ENV).ok().as_deref(), &carried);
+
     let mut findings = Vec::new();
     for top in &request.tops {
         println!("orbit-drives: nvc: {label}: elaborating {top}");
         let mut elaborate = Command::new(NVC_BIN);
-        // nvc's argv is option-first: the global `--std` leads, the
-        // command follows (`nvc --std=2008 -e <top>`); after the command
-        // it is rejected (`** Fatal: unrecognised elaboration option`,
-        // probed live).
-        elaborate.arg(STD).arg("-e").arg(top);
+        // nvc's argv is option-first: the global block leads (`--std`,
+        // `-L .`, `--work=<the top's library>`), the command follows
+        // (`nvc --std=2008 -L . --work=work -e <top>`); after the command
+        // the globals are rejected (`** Fatal: unrecognised elaboration
+        // option`, probed live).
+        elaborate.args(global_args(&top_library)).arg("-e").arg(top);
         // The extras ride the drive's last step verbatim: the run argv on
         // the sim face, the elaboration argv on the build face (there is
         // no run to carry them, and silently dropping a user argument
@@ -283,7 +334,7 @@ pub fn drive(request: &Drive, mode: Mode) -> Result<(), DriveError> {
         match mode {
             Mode::Build => println!("orbit-drives: nvc: {label}: {top}: elaborated"),
             Mode::Sim => {
-                let outcome = run_top(top, &request.extra, label)?;
+                let outcome = run_top(top, &top_library, &request.extra, label)?;
                 if outcome.clean() {
                     println!("orbit-drives: nvc: {label}: {top}: pass");
                 } else if outcome.has_face() {
@@ -313,15 +364,24 @@ pub fn drive(request: &Drive, mode: Mode) -> Result<(), DriveError> {
     }
 }
 
-/// Run one elaborated top and capture its log: `nvc --std=2008 -r <top>
-/// <extras>`. The run options are legal after the toplevel unit (probed
-/// clean with `--stop-time=1ns`); there is no `--assert-level` analogue
-/// pinned for nvc because none is needed -- nvc's run exit probed honest
-/// on every failure face, and the judge gates the log regardless.
-fn run_top(top: &str, extra: &[String], label: &str) -> Result<RunOutcome, DriveError> {
+/// Run one elaborated top and capture its log: `nvc --std=2008 -L .
+/// --work=<the top's library> -r <top> <extras>`. The run options are
+/// legal after the toplevel unit (probed clean with `--stop-time=1ns`);
+/// there is no `--assert-level` analogue pinned for nvc because none is
+/// needed -- nvc's run exit probed honest on every failure face, and the
+/// judge gates the log regardless.
+fn run_top(
+    top: &str,
+    library: &str,
+    extra: &[String],
+    label: &str,
+) -> Result<RunOutcome, DriveError> {
     println!("orbit-drives: nvc: {label}: running {top}");
     let mut run = Command::new(NVC_BIN);
-    run.arg(STD).arg("-r").arg(top).args(extra);
+    run.args(global_args(library))
+        .arg("-r")
+        .arg(top)
+        .args(extra);
     let output = capture(NVC_BIN, &mut run).map_err(DriveError::Spawn)?;
     let log = join_log(lossy(&output.stdout), lossy(&output.stderr));
     print_block(&log);
@@ -333,16 +393,111 @@ fn run_top(top: &str, extra: &[String], label: &str) -> Result<RunOutcome, Drive
 }
 
 /// One `nvc -a` attempt: `Ok` when nvc accepted the file, `Err` with the
-/// stderr when it did not. The global `--std` leads the command, per the
-/// probed option-first shape.
-fn analyze_once(file: &Path) -> Result<(), String> {
+/// stderr when it did not. The global block leads the command (`--std`,
+/// `-L .`, `--work=<the row's library>`), per the probed option-first
+/// shape -- and the work library is what makes the attempt multi-library:
+/// each file lands in the directory of the library its blueprint row
+/// declares.
+fn analyze_once(file: &Path, library: &str) -> Result<(), String> {
     let mut command = Command::new(NVC_BIN);
-    command.arg(STD).arg("-a").arg(file);
+    command.args(global_args(library)).arg("-a").arg(file);
     match capture(NVC_BIN, &mut command) {
         Ok(output) if output.status.success() => Ok(()),
         Ok(output) => Err(lossy(&output.stderr)),
         Err(message) => Err(message),
     }
+}
+
+/// The leading global block every nvc argv carries: the std pin, the cwd
+/// library search path (`-L .`), and the work library pin
+/// (`--work=<library>`). All three are GLOBAL options and nvc's argv is
+/// option-first -- placed after the command they are rejected (`**
+/// Fatal: unrecognised analysis option --std=2008`, probed) -- so the
+/// block always leads: analyze, elaborate, and run alike.
+///
+/// The `--work` value is consumed verbatim from the blueprint's library
+/// column on the analyze faces (the §25 ruling: the library name is the
+/// project's declared name, orbit's planner is its source of truth); on
+/// the elaborate and run faces it is the top's library, resolved by
+/// [`top_library`].
+fn global_args(library: &str) -> Vec<String> {
+    let mut args = vec![STD.to_string()];
+    args.extend(SEARCH_PATH_ARGS.iter().map(|arg| arg.to_string()));
+    args.push(format!("--work={library}"));
+    args
+}
+
+/// The library that holds the tops -- the `--work` pin on the elaborate
+/// and run argv.
+///
+/// nvc's bare-top commands search the WORK library ONLY: `-e tb` with the
+/// top analyzed into any other library answers `** Fatal: cannot find
+/// unit WORK.TB in library WORK` (exit 1, probed live on nvc 1.23.0,
+/// 2026-11-07, even with that library's directory on the search path), so
+/// the drive must name the top's library on every elaboration and run.
+///
+/// The resolution, loudest voice first:
+///
+/// 1. `$ORBIT_PROJECT_LIBRARY` -- orbit's own voice. The planner sets it
+///    on every spawned target to the working project's HDL library, and
+///    the designated testbench is a working-project file, so under orbit
+///    this is always the right answer (and generally NOT `work`: orbit
+///    defaults a project's library to the project's name). An empty
+///    value counts as absent -- the `$ORBIT_TB_NAME` stance.
+/// 2. The blueprint's single carried library -- direct invocation
+///    without orbit: when every VHDL row declares the same library, the
+///    top is necessarily in it.
+/// 3. nvc's default [`DEFAULT_LIBRARY`] -- the leftover case (several
+///    libraries, no env): a guess, but a SAFE one. The drive wipes every
+///    library directory first, so `work` cannot hold a stale unit; a
+///    wrong guess dies loudly on nvc's own `cannot find unit WORK.TB`
+///    elaboration refusal -- never a silent degradation.
+fn top_library(project_library: Option<&str>, entries: &[Entry]) -> String {
+    match project_library {
+        Some(library) if !library.is_empty() => library.to_string(),
+        _ => {
+            let mut distinct: Vec<&str> =
+                entries.iter().map(|entry| entry.library.as_str()).collect();
+            distinct.sort_unstable();
+            distinct.dedup();
+            match distinct.as_slice() {
+                [only] => (*only).to_string(),
+                _ => DEFAULT_LIBRARY.to_string(),
+            }
+        }
+    }
+}
+
+/// Remove every nvc work library directory under `dir` -- the drive's
+/// output directory, passed as the cwd (`.`). A directory is nvc's when
+/// it carries the [`LIBRARY_MARKER`] file: nvc's own recognition rule
+/// (`_NVC_LIB`), and the only honest way to catch the libraries this
+/// blueprint no longer names beside the ones it does -- a library left
+/// by a previous drive's blueprint would otherwise stay resolvable and
+/// serve stale units to a `library <other>;` clause.
+fn wipe_libraries(dir: &Path) -> Result<(), String> {
+    let unreadable = |e: std::io::Error| {
+        format!(
+            "cannot wipe the stale work libraries: cannot read {}: {e}",
+            dir.display()
+        )
+    };
+    let mut victims = Vec::new();
+    for entry in fs::read_dir(dir).map_err(unreadable)? {
+        let path = entry.map_err(unreadable)?.path();
+        if path.is_dir() && path.join(LIBRARY_MARKER).exists() {
+            victims.push(path);
+        }
+    }
+    for path in victims {
+        if let Err(e) = fs::remove_dir_all(&path) {
+            return Err(format!(
+                "cannot wipe the stale work library {}/: {e}",
+                path.display()
+            ));
+        }
+    }
+    Ok(())
 }
 
 #[cfg(test)]
@@ -491,6 +646,107 @@ mod tests {
             "the note should name the plan: {note}"
         );
         assert!(note.starts_with("orbit-drives: nvc: note:"));
+    }
+
+    #[test]
+    fn every_argv_leads_with_the_pinned_global_block() {
+        // The probed option-first shape: the std pin, the cwd search
+        // path, the work library pin -- all GLOBAL options, always
+        // leading, never following a command (after it nvc answers
+        // `** Fatal: unrecognised analysis option`).
+        assert_eq!(
+            global_args("grlib"),
+            vec![
+                "--std=2008".to_string(),
+                "-L".to_string(),
+                ".".to_string(),
+                "--work=grlib".to_string(),
+            ]
+        );
+        // The library name rides verbatim -- orbit's planner owns it (the
+        // §25 ruling); the drive never normalizes it to nvc's default.
+        assert_eq!(global_args("work")[3], "--work=work");
+        assert_eq!(global_args("MyLib")[3], "--work=MyLib");
+    }
+
+    #[test]
+    fn the_top_library_reads_orbits_voice_first() {
+        let entries = parse_blueprint("VHDL\tgrlib\t./pkg.vhd\nVHDL\twork\t./tb.vhd\n").unwrap();
+        // orbit's env is the loudest voice: it wins even where the
+        // blueprint could answer on its own.
+        assert_eq!(top_library(Some("mylib"), &entries), "mylib");
+        assert_eq!(top_library(Some("work"), &entries), "work");
+        // An empty value counts as absent -- the `$ORBIT_TB_NAME` stance
+        // -- so the ladder falls through to the next voice.
+        assert_eq!(top_library(Some(""), &entries), "work");
+    }
+
+    #[test]
+    fn the_top_library_falls_through_the_ladder() {
+        // No env, one carried library: the top is necessarily in it.
+        let one = parse_blueprint("VHDL\tmylib\t./a.vhd\nVHDL\tmylib\t./b.vhd\n").unwrap();
+        assert_eq!(top_library(None, &one), "mylib");
+        // No env, several libraries: nvc's default `work` -- a guess that
+        // cannot pass silently, because the wiped `work` library cannot
+        // hold a stale unit: a wrong guess dies on nvc's own elaboration
+        // refusal (`** Fatal: cannot find unit WORK.TB in library WORK`).
+        let many = parse_blueprint("VHDL\tgrlib\t./p.vhd\nVHDL\twork\t./tb.vhd\n").unwrap();
+        assert_eq!(top_library(None, &many), "work");
+        // An empty blueprint has no library to name: the default.
+        assert_eq!(top_library(None, &[]), "work");
+    }
+
+    #[test]
+    fn the_wipe_takes_every_marked_library_and_nothing_else() {
+        let dir =
+            std::env::temp_dir().join(format!("orbit-drives-nvc-wipe-{}", std::process::id()));
+        fs::create_dir_all(&dir).unwrap();
+        let grlib = dir.join("grlib");
+        let work = dir.join("work");
+        let plain = dir.join("plain");
+        for library in [&grlib, &work, &plain] {
+            fs::create_dir_all(library).unwrap();
+        }
+        fs::write(grlib.join(LIBRARY_MARKER), "nvc 1.23.0").unwrap();
+        fs::write(work.join(LIBRARY_MARKER), "nvc 1.23.0").unwrap();
+        // A file named like the marker at the top level is not a library
+        // directory: it is not the drive's state to take.
+        fs::write(dir.join(LIBRARY_MARKER), "stray").unwrap();
+        // A directory without the marker is not nvc's state either -- a
+        // library the marker does not recognize is not one nvc would
+        // resolve either (its own rule).
+        fs::write(plain.join("keep.txt"), "keep").unwrap();
+
+        wipe_libraries(&dir).unwrap();
+
+        assert!(!grlib.exists(), "the marked library must die");
+        assert!(!work.exists(), "the marked library must die");
+        assert!(
+            plain.exists(),
+            "a directory without the marker is not nvc's state"
+        );
+        assert!(
+            dir.join(LIBRARY_MARKER).exists(),
+            "a stray marker FILE is not a library directory"
+        );
+        fs::remove_dir_all(&dir).ok();
+    }
+
+    #[test]
+    fn the_wipe_surfaces_an_unreadable_directory_as_usage_class() {
+        let missing = std::env::temp_dir().join(format!(
+            "orbit-drives-nvc-wipe-missing-{}",
+            std::process::id()
+        ));
+        let err = wipe_libraries(&missing).unwrap_err();
+        assert!(
+            err.starts_with("cannot wipe the stale work libraries"),
+            "the wipe failure should name itself: {err}"
+        );
+        assert!(
+            err.contains(&missing.display().to_string()),
+            "the wipe failure should name the directory: {err}"
+        );
     }
 
     #[test]
