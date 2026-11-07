@@ -155,10 +155,142 @@ fn unknown_tool_is_an_error() {
 fn vocabulary_registry() {
     // The registry carries exactly the probed tools, and ghdl's vocabulary
     // is the three probed faces, in probed order.
-    assert_eq!(contracts::tools(), &[Tool::Ghdl]);
+    assert_eq!(contracts::tools(), &[Tool::Ghdl, Tool::Nvc]);
     assert_eq!(Tool::Ghdl.name(), "ghdl");
     assert_eq!(
         Tool::Ghdl.vocabulary(),
         &[":error:", "(assertion failure)", "(assertion error)"]
+    );
+}
+
+// ===== the nvc vocabulary, probed live on nvc 1.23.0, 2026-11-07 =====
+
+// a real nvc severity-failure run (`nvc --std=2008 -r tb_fail`): the run
+// stops, exit 1. nvc leads every diagnostic with its own `** Severity:`
+// marker -- the opposite of ghdl's path-led lines -- and appends a
+// process line indented three spaces.
+const NVC_FAILING_LOG: &str = "\
+** Failure: 0ms+0: the design is wrong
+   Process :tb_fail:_p0 at tb_fail.vhd:5
+";
+
+// a violated `severity error` check (`nvc --std=2008 -r tb_err`): nvc
+// prints the error face, CONTINUES -- the note follows -- and STILL
+// exits 1, unlike bare ghdl's exit-0 hole. The face convicts regardless
+// of the exit; here both witnesses agree.
+const NVC_SEVERITY_ERROR_LOG: &str = "\
+** Error: 0ms+0: check failed
+   Process :tb_err:_p0 at tb_err.vhd:5
+** Note: 0ms+0: simulation continued
+   Process :tb_err:_p0 at tb_err.vhd:5
+";
+
+// the gentler neighbors, probed live on a continuing run that exits 0:
+// continuations, not failures, so they must never judge a log
+const NVC_WARNING_NOTE_LOG: &str = "\
+** Warning: 0ms+0: check flagged
+   Process :tb_warn:_p0 at tb_warn.vhd:5
+** Note: 0ms+0: marker logged
+   Process :tb_warn:_p0 at tb_warn.vhd:5
+** Note: 0ms+0: all quiet
+   Process :tb_warn:_p0 at tb_warn.vhd:5
+";
+
+// an analysis error (`nvc --std=2008 -a broken.vhd`, exit 1): the same
+// `** Error:` marker nvc uses at runtime, here above its caret block. A
+// run log never carries it -- the analyze step is never judged -- but the
+// face is probed and recorded.
+const NVC_ANALYSIS_ERROR_LOG: &str = "\
+** Error: unexpected end while parsing port clause, expecting one of bus, :=, ; or )
+   > broken.vhd:3
+   |
+ 3 | end broken;
+   | ^^^ this token was unexpected
+";
+
+// the elaboration refusal (`nvc --std=2008 -e tb_nosuch`, exit 1): the
+// top names no analyzed unit
+const NVC_ELAB_FAILURE_LOG: &str = "\
+** Fatal: cannot find unit WORK.TB_NOSUCH in library WORK
+";
+
+// the lowercase drift of every nvc face: nvc capitalizes its markers, so
+// none of these is a face it writes
+const NVC_LOWERCASE_DRIFT_LOG: &str = "\
+** failure: 0ms+0: the design is wrong
+** error: 0ms+0: check failed
+** fatal: cannot find unit WORK.TB_NOSUCH in library WORK
+";
+
+#[test]
+fn nvc_failing_log_judges_fail() {
+    // The probed nvc severity-failure log judges FAIL.
+    assert!(!contracts::judge(&Tool::Nvc, NVC_FAILING_LOG));
+}
+
+#[test]
+fn nvc_severity_error_log_judges_fail() {
+    // A violated `severity error` check judges FAIL -- and, unlike the
+    // ghdl hole, nvc's exit convicts this run too: the sim continued and
+    // nvc still exited 1, probed live on nvc 1.23.0 (2026-11-07).
+    assert!(!contracts::judge(&Tool::Nvc, NVC_SEVERITY_ERROR_LOG));
+}
+
+#[test]
+fn nvc_analysis_error_log_judges_fail() {
+    // The probed analysis-error face judges FAIL. Recorded for the
+    // vocabulary's completeness; the analyze step gates on nvc's honest
+    // exit and is never judged.
+    assert!(!contracts::judge(&Tool::Nvc, NVC_ANALYSIS_ERROR_LOG));
+}
+
+#[test]
+fn nvc_elaboration_failure_log_judges_fail() {
+    // The probed `** Fatal:` elaboration refusal judges FAIL.
+    assert!(!contracts::judge(&Tool::Nvc, NVC_ELAB_FAILURE_LOG));
+}
+
+#[test]
+fn nvc_warning_and_note_stay_clean() {
+    // The probed continuation faces (`** Warning:`, `** Note:`) judge
+    // PASS: they are not failures, and a clean nvc run's own report notes
+    // render as `** Note:` faces.
+    assert!(contracts::judge(&Tool::Nvc, NVC_WARNING_NOTE_LOG));
+}
+
+#[test]
+fn nvc_lowercase_drift_never_matches() {
+    // A lowercase drift of every nvc face judges PASS: nvc capitalizes
+    // its markers, case-exactly.
+    assert!(contracts::judge(&Tool::Nvc, NVC_LOWERCASE_DRIFT_LOG));
+}
+
+#[test]
+fn nvc_each_face_alone_judges_fail() {
+    // Each of nvc's faces judges FAIL on its own, in an otherwise clean
+    // log.
+    for face in Tool::Nvc.vocabulary() {
+        let log = format!("** Note: 0ms+0: testing started\nnoise {face} tail\n");
+        assert!(
+            !contracts::judge(&Tool::Nvc, &log),
+            "face {face:?} did not judge its log"
+        );
+    }
+}
+
+#[test]
+fn nvc_empty_log_judges_pass() {
+    // An empty log carries no failure face, so it judges PASS.
+    assert!(contracts::judge(&Tool::Nvc, ""));
+}
+
+#[test]
+fn nvc_vocabulary_is_the_three_probed_markers() {
+    // nvc's vocabulary is the three probed severity markers, in probed
+    // order.
+    assert_eq!(Tool::Nvc.name(), "nvc");
+    assert_eq!(
+        Tool::Nvc.vocabulary(),
+        &["** Failure:", "** Error:", "** Fatal:"]
     );
 }

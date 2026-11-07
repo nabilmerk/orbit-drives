@@ -20,7 +20,7 @@ use std::env;
 use std::path::PathBuf;
 use std::process::ExitCode;
 
-use orbit_contracts::ghdl;
+use orbit_contracts::{ghdl, nvc};
 
 const USAGE: &str = "\
 orbit-contracts: the probed failure vocabularies and the honest-exit targets for orbit
@@ -31,17 +31,20 @@ USAGE:
 SUBCOMMANDS:
     ghdl         analyze the blueprint's VHDL in blueprint order, elaborate
                  and run each top, and gate every run log on ghdl's probed
-                 failure vocabulary AND ghdl's exit (the sim face)
+                 failure vocabulary AND ghdl's exit (the ghdl sim face)
     ghdl-build   analyze the blueprint's VHDL in blueprint order and
                  elaborate each top, exit honest; no simulation and
                  nothing judged -- the elaboration exits are honest, so
-                 the exit is the only witness a build needs (the build
-                 face)
+                 the exit is the only witness a build needs (the ghdl
+                 build face)
+    nvc          the same judged sim drive, on nvc's probed failure
+                 vocabulary (the nvc sim face)
+    nvc-build    the same honest build face, on nvc (the nvc build face)
 
 SHARED OPTIONS:
     --blueprint <path>  the TSV blueprint (default: $ORBIT_BLUEPRINT)
-    --top <name>        a top unit to elaborate (and run: `ghdl`);
-                        repeatable
+    --top <name>        a top unit to elaborate (and run: the sim
+                        faces); repeatable
     -h, --help          print this help
 
 TOPS:
@@ -51,16 +54,16 @@ TOPS:
 
 EXTRAS:
     every other argument rides the drive's LAST tool argv verbatim: the
-    `ghdl -r` argv on the sim face, the `ghdl -e` argv on the build face
-    (there is no run to carry them, and a dropped argument would be a
-    silent degradation). Orbit strips its own `--` separator and appends
-    the extras straight onto this argv, so `orbit test --target ghdl --
-    -gW=4 --vcd=w.vcd` passes both through to ghdl
+    `ghdl -r` / `nvc -r` argv on the sim faces, the `ghdl -e` / `nvc -e`
+    argv on the build faces (there is no run to carry them, and a dropped
+    argument would be a silent degradation). Orbit strips its own `--`
+    separator and appends the extras straight onto this argv, so `orbit
+    test --target ghdl -- -gW=4 --vcd=w.vcd` passes both through to ghdl
 
 EXITS:
     0    clean (every run judged clean, or every top elaborated clean)
     1    findings (a log carried a failure face, a run exited nonzero, or
-         ghdl reported a broken design)
+         the tool reported a broken design)
     2    usage (bad argv, no top to run, unreadable blueprint, a fileset
          the drive does not carry)
 ";
@@ -76,15 +79,20 @@ enum Subcommand {
     /// `ghdl`: ghdl's sim face -- the judged drive (analyze + elaborate +
     /// run, every run log gated).
     GhdlSim,
+    /// `nvc-build`: nvc's build face -- the same honest shape, nvc's
+    /// probed process.
+    NvcBuild,
+    /// `nvc`: nvc's sim face -- the judged drive on nvc's probed faces.
+    NvcSim,
 }
 
 impl Subcommand {
-    /// The drive mode the subcommand picks: how far the shared ghdl drive
-    /// goes.
+    /// The drive mode the subcommand picks: how far the tool's shared
+    /// drive goes.
     fn mode(self) -> ghdl::Mode {
         match self {
-            Subcommand::GhdlBuild => ghdl::Mode::Build,
-            Subcommand::GhdlSim => ghdl::Mode::Sim,
+            Subcommand::GhdlBuild | Subcommand::NvcBuild => ghdl::Mode::Build,
+            Subcommand::GhdlSim | Subcommand::NvcSim => ghdl::Mode::Sim,
         }
     }
 }
@@ -92,7 +100,7 @@ impl Subcommand {
 /// The error for a subcommand name that resolves to nothing: loud,
 /// usage-class, exit 2.
 fn unknown_subcommand(name: &str) -> String {
-    format!("no target named {name:?}: carried subcommands: ghdl, ghdl-build")
+    format!("no target named {name:?}: carried subcommands: ghdl, ghdl-build, nvc, nvc-build")
 }
 
 /// The argv parse outcome.
@@ -132,6 +140,8 @@ fn parse(argv: &[String]) -> Result<Cli, CliError> {
     let subcommand = match tool_arg.as_str() {
         "ghdl-build" => Subcommand::GhdlBuild,
         "ghdl" => Subcommand::GhdlSim,
+        "nvc-build" => Subcommand::NvcBuild,
+        "nvc" => Subcommand::NvcSim,
         other => return Err(CliError(unknown_subcommand(other))),
     };
 
@@ -242,11 +252,21 @@ fn drive_request(request: Request) -> ExitCode {
                 extra: request.extra,
             },
             request.subcommand.mode(),
-        ),
+        )
+        .map_err(|e| e.exit_code()),
+        Subcommand::NvcBuild | Subcommand::NvcSim => nvc::drive(
+            &ghdl::Drive {
+                blueprint,
+                tops,
+                extra: request.extra,
+            },
+            request.subcommand.mode(),
+        )
+        .map_err(|e| e.exit_code()),
     };
     match outcome {
         Ok(()) => ExitCode::SUCCESS,
-        Err(e) => ExitCode::from(e.exit_code()),
+        Err(code) => ExitCode::from(code),
     }
 }
 
@@ -308,6 +328,20 @@ mod tests {
     }
 
     #[test]
+    fn nvc_build_is_its_own_subcommand_driving_the_build_face() {
+        let request = run_of(parse(&argv(&["nvc-build", "--top", "tb"])).unwrap());
+        assert_eq!(request.subcommand, Subcommand::NvcBuild);
+        assert_eq!(request.subcommand.mode(), ghdl::Mode::Build);
+    }
+
+    #[test]
+    fn nvc_drives_the_sim_face() {
+        let request = run_of(parse(&argv(&["nvc", "--top", "tb"])).unwrap());
+        assert_eq!(request.subcommand, Subcommand::NvcSim);
+        assert_eq!(request.subcommand.mode(), ghdl::Mode::Sim);
+    }
+
+    #[test]
     fn parse_leaves_the_blueprint_to_the_environment() {
         let request = run_of(parse(&argv(&["ghdl", "--top", "tb"])).unwrap());
         assert_eq!(request.blueprint, None);
@@ -336,7 +370,7 @@ mod tests {
         // The error also names what IS carried, so the fix is readable
         // from the message alone.
         assert!(
-            err.0.contains("ghdl-build"),
+            err.0.contains("ghdl-build") && err.0.contains("nvc-build"),
             "the error should list the carried subcommands: {}",
             err.0
         );

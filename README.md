@@ -51,11 +51,14 @@ orbit-contracts <SUBCOMMAND> --blueprint <path> --top <name> [extra tool args...
 
 Subcommands (one per orbit target entry):
 
-- `ghdl` -- the sim face: analyze, elaborate, run, judge.
-- `ghdl-build` -- the build face: analyze, elaborate, exit honest. No
-  simulation, no run log, nothing judged: `ghdl -a` and `ghdl -e` exit
+- `ghdl` -- the ghdl sim face: analyze, elaborate, run, judge.
+- `ghdl-build` -- the ghdl build face: analyze, elaborate, exit honest.
+  No simulation, no run log, nothing judged: `ghdl -a` and `ghdl -e` exit
   nonzero on a broken design (probed live), so the exit is the only
   witness a build needs.
+- `nvc` -- the nvc sim face: the same judged drive on nvc's probed faces.
+- `nvc-build` -- the nvc build face: the same honest shape, no simulation,
+  nothing judged.
 
 Options:
 
@@ -64,10 +67,11 @@ Options:
   With no `--top`, the drive runs `$ORBIT_TB_NAME` (orbit exports it; empty
   in all-mode counts as absent). Exit 2 when neither names a top.
 - anything else -- a tool extra, appended verbatim to the drive's LAST
-  tool argv: each `ghdl -r` on the sim face, each `ghdl -e` on the build
-  face (there is no run to carry them, and a dropped argument would be a
-  silent degradation; an option the elaboration does not speak is ghdl's
-  own loud rejection, surfaced as an exit-1 elaborate failure).
+  tool argv: each `ghdl -r` / `nvc -r` on the sim faces, each `ghdl -e` /
+  `nvc -e` on the build faces (there is no run to carry them, and a
+  dropped argument would be a silent degradation; an option the
+  elaboration does not speak is the tool's own loud rejection, surfaced
+  as an exit-1 elaborate failure).
 
 Exits:
 
@@ -103,12 +107,39 @@ through the judge.
 6. (`ghdl` only) Gate the run: a probed failure face in the log OR a
    nonzero ghdl exit is a finding. Either witness convicts.
 
+## The nvc drive
+
+Two target entries (`nvc`, `nvc-build`) share one drive with the same
+shapes as ghdl's -- blueprint, deferral-loop analysis, elaboration per
+top, judged run -- on nvc's probed process and faces. The differences the
+probes wrote down:
+
+- **The argv is option-first, the opposite of ghdl.** `--std=2008` is a
+  global option and must LEAD: `nvc --std=2008 -a f.vhd`. After the
+  command, nvc answers `** Fatal: unrecognised analysis option
+  --std=2008` (exit 1). Run options are legal after the toplevel unit
+  (`nvc --std=2008 -r top --stop-time=1ns`, probed clean), so the extras
+  ride there.
+- **The library state is a `work/` directory**, not ghdl's clock file,
+  and the drive wipes it before every analysis -- the same
+  correctness-before-incrementality stance as ghdl, though probed
+  honestly: nvc tolerates re-analysis in a stale library without ghdl's
+  obsoleted-design refusal, so the wipe is symmetry here, not
+  load-bearing.
+- **No `--assert-level` analogue is pinned.** None is needed: nvc's run
+  exits probed honest on every failure face (below), and the judge gates
+  the log regardless.
+- **One `work` library**, like ghdl's v1: the blueprint's library column
+  is carried, not mapped.
+
 ## The probed facts
 
-Every pattern in the vocabulary and every drive fact below was probed on
-**ghdl 6.0.0 on this box, 2026-11-07**, on assert- and report-driven
-testbenches, both bare and through the drive. Each row carries the argv
-that produced the face.
+Every pattern in a vocabulary and every drive fact below was probed live
+on this box, 2026-11-07, on assert- and report-driven testbenches, both
+bare and through the drive. Each row carries the argv that produced the
+face.
+
+### ghdl 6.0.0
 
 | face / fact | argv that wrote it | what ghdl did |
 |------|-----|------|
@@ -131,34 +162,59 @@ real failure log judges clean, and so does a clean log that merely mentions
 retired gate this replaces counted `error):`/`ERROR` substrings, matched
 nothing ghdl writes, and false-failed clean logs.
 
+### nvc 1.23.0
+
+| face / fact | argv that wrote it | what nvc did |
+|------|-----|------|
+| `** Failure: 0ms+0: the design is wrong` (then `   Process :tb_fail:_p0 at tb_fail.vhd:5`) | `nvc --std=2008 -a tb_fail.vhd; nvc --std=2008 -e tb_fail; nvc --std=2008 -r tb_fail` (same through the drive) | a violated `assert ... severity failure` stops the run, exit 1 -- honest |
+| `** Error: 0ms+0: check failed` | `nvc --std=2008 -r tb_err` on a `severity error` assert | nvc prints the face, **continues** (`** Note: 0ms+0: simulation continued` follows), and **still exits 1** -- unlike bare ghdl's exit-0 hole, nvc's exit convicts on its own; the face is the second witness |
+| `** Warning: 0ms+0: ...`, `** Note: 0ms+0: ...` | `nvc --std=2008 -r tb_warn` | the gentler severities on a continuing run that **exits 0** -- continuations, **never judged** |
+| `** Failure: 0ms+0: stop now` / `** Error: 0ms+0: flagged` | `report ... severity failure;` / `report ... severity error;` statements, `nvc --std=2008 -r ...` | report statements ride the same faces: failure stops (exit 1), error continues and **exits 1** -- the bare-ghdl report hole does not exist on nvc |
+| `** Error: unexpected end while parsing port clause, ...` above a `> broken.vhd:3` caret block | `nvc --std=2008 -a broken.vhd` | the analysis-error face (same `** Error:` marker as runtime), exit 1; the analyze step gates on the exit and is never judged |
+| `** Error: design unit GATE not found in library WORK` | `nvc --std=2008 -a top.vhd` with `gate.vhd` unanalyzed | the order-dependence face: the consumer cannot analyze before its provider, exit 1 -- and the failed analysis does not poison the library: provider then consumer both analyze after (the deferral loop's shape, probed live) |
+| `** Fatal: cannot find unit WORK.TB_NOSUCH in library WORK` | `nvc --std=2008 -e tb_nosuch` | the elaboration refusal when the top names no analyzed unit, exit 1 |
+| `** Fatal: unrecognised analysis option --std=2008` | `nvc -a --std=2008 f.vhd` | nvc's argv is option-FIRST: the global `--std` leads and the command follows -- the opposite of ghdl's command-first shape |
+| re-analysis, elaboration and run all exit 0 | a second drive in one output directory: provider then consumer re-analyzed, `-e`, `-r` | nvc tolerates stale-library re-analysis without ghdl's obsoleted-design refusal -- the wipe is symmetry here, not load-bearing |
+
+nvc's markers are case-exact capitals: a lowercase drift (`** error:`,
+`** failure:`) is not one of its faces and never judges a log. And as with
+ghdl, a testbench's own report note that embeds an nvc face shape
+(`** Error: retrying`) convicts the run -- keep report notes free of
+nvc-face shapes.
+
 ## Honest limits
 
 - **VHDL only.** `VLOG`, `SYSV`, and custom filesets are a loud exit-2
   ("not yet carried"), never a silent skip. Mixed-language designs stay out
   of the contract.
-- **One vocabulary.** Only ghdl is carried. An unknown tool name is a loud
-  error at the CLI, never a guess.
+- **Two vocabularies: ghdl and nvc.** Both are VHDL simulators. Any other
+  tool name is a loud error at the CLI, never a guess.
 - **The library column is carried, not mapped.** Every file analyzes into
-  ghdl's `work` library; a multi-library orbit project is out of scope for
-  v1.
-- **`--std=08` is pinned** and cannot be overridden from the argv yet; the
-  extras reach the drive's last step only (`ghdl -r` on the sim face,
-  `ghdl -e` on the build face).
-- **The state is run-scoped, not incremental.** Every drive wipes
-  `work-obj08.cf` first. A large design pays a full re-analysis per drive;
-  correctness before incrementality is the v1 stance.
+  the tool's `work` library (ghdl's `work-obj08.cf` clock, nvc's `work/`
+  directory); a multi-library orbit project is out of scope for v1.
+- **The standards are pinned** (`--std=08` for ghdl, `--std=2008` for nvc)
+  and cannot be overridden from the argv yet; the extras reach the drive's
+  last step only (`-r` on the sim faces, `-e` on the build faces).
+- **The state is run-scoped, not incremental.** Every drive wipes the work
+  library first. A large design pays a full re-analysis per drive;
+  correctness before incrementality is the v1 stance. (Probed honestly:
+  ghdl's wipe is load-bearing -- a stale library obsoletes its own design;
+  nvc tolerates the stale library, and its wipe is symmetry.)
 - **Bare ghdl only:** a `report ... severity error` statement slips a bare
   `ghdl -r` (face `(report error)`, exit 0, no judged face). The shipped
   path catches it: the drive pins `--assert-level=error`, which stops the
-  run and writes the `./<top>:error: report failed` face.
-- **A lowercase face shape mid-text judges fail.** A testbench's own report
-  note that embeds a lowercase ghdl face (`bus:error: retrying`) convicts
-  the run: the vocabulary is case-exact lowercase substrings and cannot
-  tell your prose from ghdl's. Keep report notes free of ghdl-face shapes.
+  run and writes the `./<top>:error: report failed` face. nvc has no such
+  hole probed: its severity-error runs continue the simulation but still
+  exit 1.
+- **A face shape mid-text judges fail.** The vocabularies are case-exact
+  substrings and cannot tell your prose from the tool's: a testbench's own
+  report note that embeds a ghdl face shape (`bus:error: retrying`) or an
+  nvc face shape (`** Error: retrying`) convicts the run. Keep report notes
+  free of face shapes.
 - **The run log is captured, then relayed**, not streamed; a long
   simulation's output appears when the run ends.
-- **ghdl resolves on PATH.** The orbit target contract carries no
-  binary-path field, so the drive pins no path.
+- **The tools resolve on PATH.** The orbit target contract carries no
+  binary-path field, so the drives pin no path.
 - **License.** The Cargo.toml declares `MIT OR Apache-2.0`; the license
   texts are held until the maintainer conversation. Orbit itself is
   GPL-3 -- irrelevant here: a target is a spawned process, not a derived
@@ -168,18 +224,21 @@ nothing ghdl writes, and false-failed clean logs.
 
 ```sh
 cargo test            # the contract, drive, and argv suites
-cargo test -- --ignored   # + the real-spawn test: the real binary, real
-                          # ghdl, the real orbit spawn shape, twice in one
-                          # output directory
+cargo test -- --ignored   # + the real-spawn tests: the real binary, real
+                          # ghdl and real nvc, the real orbit spawn shape,
+                          # order-dependent blueprints through the deferral
+                          # loop, judged severity failures, twice in one
+                          # output directory, and the build faces
 ```
 
 The contract suite (`tests/contracts.rs`) ports the aquila contract tests
 fixture-for-fixture (upstream: `github.com/chaseruskin/aquila`,
-`tests/test_contracts.py`): the real failing log judges fail; the clean
-logs (including the one mentioning "ERROR" mid-text) judge pass; the
-uppercase drifts never judge; the severity-error face judges fail; the
-warning/note faces stay clean; and the registry pins exactly one carried
-tool. The drive suite pins the deferral loop (a consumer-before-provider
-pair must retry), the no-progress stop, the TSV blueprint parse, the crash
-door (a clean log does not green-light a nonzero exit), and the judge gate
-on a fake severity-error log.
+`tests/test_contracts.py`) and extends them with nvc's probed faces: the
+real failing logs judge fail; the clean logs (including the one mentioning
+"ERROR" mid-text) judge pass; the uppercase (ghdl) and lowercase (nvc)
+drifts never judge; the severity-error faces judge fail; the warning/note
+faces stay clean; and the registry pins exactly the two carried tools. The
+drive suites pin the deferral loop (a consumer-before-provider pair must
+retry), the no-progress stop, the TSV blueprint parse, the crash door (a
+clean log does not green-light a nonzero exit), and the judge gate on fake
+severity-error logs for both tools.

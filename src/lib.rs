@@ -7,11 +7,15 @@
 //! captures the tool's log and gates it on the tool's probed failure
 //! vocabulary -- faces read off live runs, never invented -- before
 //! reporting its own honest exit to orbit. The judge exists because the
-//! tools' exits do not: ghdl exits 0 on a violated `severity error` check,
-//! and the face in the log is the only witness.
+//! tools' exits do not always: ghdl exits 0 on a violated `severity error`
+//! check, and the face in the log is the only witness; nvc's exits have
+//! probed honest so far, and there the judge is the second witness. Either
+//! witness convicts, everywhere.
 //!
 //! - [`contracts`]: the per-tool vocabularies and the judge.
-//! - [`ghdl`]: the ghdl target drive -- blueprint in, judged verdict out.
+//! - [`ghdl`]: the ghdl target drives -- blueprint in, judged verdict out.
+//! - [`nvc`]: the nvc target drives -- the same shapes, nvc's probed faces.
 
 pub mod contracts;
 pub mod ghdl;
+pub mod nvc;

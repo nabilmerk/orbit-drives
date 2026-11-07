@@ -38,26 +38,28 @@ pub const STD: &str = "--std=08";
 /// land in the log either way.
 pub const ASSERT_LEVEL: &str = "--assert-level=error";
 
-/// What the drive runs: one orbit target per variant, both faces of the
-/// same tool sharing one drive.
+/// What the drive runs: the build face stops after the elaborations, the
+/// sim face adds the judged run. Every carried tool's drive splits this
+/// way -- one [`Mode`], two orbit target entries per tool.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub enum Mode {
-    /// The `ghdl-build` target: analyze the blueprint in order, elaborate
+    /// The `*-build` targets: analyze the blueprint in order, elaborate
     /// each top, exit honest. NO simulation: there is no run, no run log,
-    /// and nothing judged. `ghdl -a` and `ghdl -e` need no log gate (both
-    /// exit nonzero on a broken design, probed live on ghdl 6.0.0), so on
-    /// this face the exit is the only witness -- the judge exists for the
-    /// sim face, whose exit lies.
+    /// and nothing judged. Analysis and elaboration need no log gate
+    /// (both exit nonzero on a broken design, probed live on ghdl 6.0.0
+    /// and nvc 1.23.0), so on this face the exit is the only witness --
+    /// the judge exists for the sim face, whose ghdl exit lies.
     Build,
-    /// The `ghdl` target: elaborate and run each top, gating every run log
-    /// on the probed vocabulary AND the exit. Either witness convicts.
+    /// The `ghdl` / `nvc` targets: elaborate and run each top, gating
+    /// every run log on the probed vocabulary AND the exit. Either
+    /// witness convicts.
     Sim,
 }
 
 impl Mode {
     /// The word the drive stamps into its progress lines, so an orbit log
     /// says which face ran.
-    fn label(self) -> &'static str {
+    pub(crate) fn label(self) -> &'static str {
         match self {
             Mode::Build => "build",
             Mode::Sim => "sim",

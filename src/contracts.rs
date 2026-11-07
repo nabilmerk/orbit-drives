@@ -6,12 +6,16 @@
 //! after its failure faces have been read off a real log. Matching is
 //! case-exact substring search, and nothing is line-anchored, because the
 //! tools do not speak that way: ghdl opens its failure lines with the
-//! offending file path or the image name, not with the severity.
+//! offending file path or the image name, not with the severity, while
+//! nvc leads every diagnostic with its own `** Severity:` marker.
 //!
 //! The judge is the gate for one reason probed live: ghdl exits 0 on a
 //! violated `severity error` check -- it prints the assertion-error face
 //! and continues -- so an exit-code gate alone would pass a failing run.
-//! The judge reads the log, where the face always lands.
+//! The judge reads the log, where the face always lands. nvc's exits are
+//! honest so far as probed (a severity-error run continues but still
+//! exits 1), so there the judge is the second witness, not the only one:
+//! either witness convicts, the same as anywhere else in this crate.
 
 use std::fmt;
 use std::str::FromStr;
@@ -50,11 +54,57 @@ pub const GHDL_VOCABULARY: &[&str] = &[
     "(assertion error)",
 ];
 
+/// nvc's failure faces, probed live on nvc 1.23.0 (2026-11-07, `nvc
+/// --std=2008 -a/-e/-r`): every diagnostic nvc writes leads with its own
+/// severity marker, so the faces anchor on the `** Severity:` shapes. A
+/// violated `assert ... severity failure` stops the run -- `** Failure:
+/// 0ms+0: the design is wrong`, then `   Process :tb_fail:_p0 at
+/// tb_fail.vhd:5` -- and exits 1, honest. A violated `severity error`
+/// check (or a `report ... severity error` statement) prints `** Error:
+/// 0ms+0: check failed`, CONTINUES the simulation -- `** Note: 0ms+0:
+/// simulation continued` follows -- and STILL exits 1: unlike bare ghdl,
+/// whose severity-error run exits 0, nvc's exit convicts on its own, and
+/// the face is the second witness. The same `** Error:` marker fronts
+/// nvc's analysis errors (`** Error: unexpected end while parsing port
+/// clause, ...` above a `> broken.vhd:3` caret block) and its
+/// missing-design-unit errors (`** Error: design unit GATE not found in
+/// library WORK`), and `** Fatal:` fronts the elaboration refusal
+/// (`** Fatal: cannot find unit WORK.TB_NOSUCH in library WORK`) and the
+/// option errors (`** Fatal: unrecognised analysis option --std=2008`,
+/// probed with the standard flag misplaced after the command -- nvc's
+/// global options lead the argv, the opposite of ghdl's command-first
+/// shape). The gentler neighbors (`** Warning:`, `** Note:`, probed on a
+/// continuing run that exits 0) are not failures and stay out.
+/// Case-exact: nvc capitalizes its markers, so a lowercase drift
+/// (`** error:`, `** failure:`) is not one of its faces and never judges
+/// a log.
+pub const NVC_VOCABULARY: &[&str] = &[
+    // `** Failure: 0ms+0: the design is wrong` -- the run-level face of a
+    // violated `assert ... severity failure` (exit 1, run stopped) and of
+    // a `report ... severity failure` statement (`** Failure: 0ms+0: stop
+    // now`, exit 1), probed on the same nvc.
+    "** Failure:",
+    // `** Error: 0ms+0: check failed` -- the face of a violated `severity
+    // error` assert or `report ... severity error` statement, after which
+    // nvc continues but still exits 1; also the analysis-stage marker
+    // (`** Error: unexpected end while parsing port clause, ...`,
+    // `** Error: design unit GATE not found in library WORK`), which a
+    // run log never carries but the vocabulary records as probed.
+    "** Error:",
+    // `** Fatal: cannot find unit WORK.TB_NOSUCH in library WORK` -- the
+    // elaboration refusal when the top names no analyzed unit, and the
+    // face of every option error (`** Fatal: unrecognised analysis option
+    // --std=2008`); always exit 1, probed.
+    "** Fatal:",
+];
+
 /// A tool carrying a probed failure vocabulary.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub enum Tool {
     /// The GHDL simulator, `ghdl` (VHDL only).
     Ghdl,
+    /// The nvc simulator, `nvc` (VHDL only).
+    Nvc,
 }
 
 /// The error for a tool name that resolves to nothing in the registry.
@@ -83,6 +133,7 @@ impl Tool {
     pub fn name(self) -> &'static str {
         match self {
             Tool::Ghdl => "ghdl",
+            Tool::Nvc => "nvc",
         }
     }
 
@@ -91,6 +142,7 @@ impl Tool {
     pub fn vocabulary(self) -> &'static [&'static str] {
         match self {
             Tool::Ghdl => GHDL_VOCABULARY,
+            Tool::Nvc => NVC_VOCABULARY,
         }
     }
 }
@@ -112,7 +164,7 @@ impl FromStr for Tool {
 
 /// The registry: every tool carrying a probed failure vocabulary.
 pub fn tools() -> &'static [Tool] {
-    &[Tool::Ghdl]
+    &[Tool::Ghdl, Tool::Nvc]
 }
 
 /// Judge a tool's log text against its probed failure vocabulary.
