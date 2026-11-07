@@ -30,10 +30,13 @@
 
 use std::fmt;
 use std::fs;
-use std::process::{Command, Output};
+use std::process::Command;
 
+use crate::blueprint::{
+    parse_blueprint, plan_note, verilog_only, BlueprintError, Drive, Entry, Mode,
+};
 use crate::contracts::{self, Tool};
-use crate::ghdl::{self, Drive, Mode};
+use crate::proc::{capture, eprint_block, join_log, lossy, print_block};
 
 /// The iverilog binary the drive spawns, resolved on PATH. The orbit
 /// target contract carries no binary-path field.
@@ -67,14 +70,15 @@ pub const SNAPSHOT: &str = "orbit-snapshot.vvp";
 
 /// The error for blueprint filesets the Verilog drives do not carry.
 ///
-/// Unlike the VHDL filter -- which nvc borrows from ghdl, message and
-/// all -- this one is shared by TWO drives (iverilog and verilator), so
-/// the message names the filesets, not one drive: a verilator user reading
-/// "the iverilog drive carries..." would be misdirected.
+/// Unlike the VHDL filter -- whose message is the ghdl drive's own, kept
+/// beside [`crate::blueprint::vhdl_only`] -- this one is shared by TWO
+/// drives (iverilog and verilator), so the message names the filesets,
+/// not one drive: a verilator user reading "the iverilog drive carries..."
+/// would be misdirected.
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub struct NotCarried {
     /// Every non-Verilog entry, in blueprint order.
-    pub entries: Vec<ghdl::Entry>,
+    pub entries: Vec<Entry>,
 }
 
 impl fmt::Display for NotCarried {
@@ -97,26 +101,6 @@ impl fmt::Display for NotCarried {
 }
 
 impl std::error::Error for NotCarried {}
-
-/// The Verilog files of the blueprint, in blueprint order.
-///
-/// Every non-Verilog entry -- `VHDL`, a custom fileset -- is rejected
-/// loudly: iverilog and verilator are Verilog/SV-native, and a silent
-/// skip would leave files the user believes were compiled. The blueprint
-/// order is carried but not load-bearing: iverilog's single compile is
-/// order-free (probed live on Icarus Verilog 12.0, 2026-11-07).
-pub fn verilog_only(entries: &[ghdl::Entry]) -> Result<Vec<std::path::PathBuf>, NotCarried> {
-    let foreign: Vec<ghdl::Entry> = entries
-        .iter()
-        .filter(|entry| entry.fileset != "VLOG" && entry.fileset != "SYSV")
-        .cloned()
-        .collect();
-    if foreign.is_empty() {
-        Ok(entries.iter().map(|entry| entry.path.clone()).collect())
-    } else {
-        Err(NotCarried { entries: foreign })
-    }
-}
 
 /// The record of the snapshot's run: what vvp exited and what it wrote.
 #[derive(Clone, Debug, PartialEq, Eq)]
@@ -160,7 +144,7 @@ impl RunOutcome {
 #[derive(Debug)]
 pub enum DriveError {
     /// The blueprint could not be read or parsed: usage-class, exit 2.
-    Blueprint(ghdl::BlueprintError),
+    Blueprint(BlueprintError),
     /// The blueprint carried filesets the drive does not speak yet:
     /// usage-class, exit 2.
     NotCarried(NotCarried),
@@ -222,20 +206,6 @@ impl std::error::Error for DriveError {
     }
 }
 
-/// The note for a blueprint plan the drive does not carry: orbit exports
-/// `$ORBIT_BLUEPRINT_PLAN` as the plan it wrote, and the drive speaks the
-/// TSV plan only. Loud but non-fatal -- the file is still read as TSV
-/// lines, and a non-TSV file fails the parse loudly right after.
-fn plan_note(plan: Option<&str>) -> Option<String> {
-    match plan {
-        Some(plan) if plan != "tsv" => Some(format!(
-            "orbit-contracts: iverilog: note: $ORBIT_BLUEPRINT_PLAN is {plan:?}; the drive \
-             carries the TSV plan only, reading the blueprint as TSV lines"
-        )),
-        _ => None,
-    }
-}
-
 /// Drive the iverilog target end to end: blueprint, one compile, and --
 /// on the sim face -- one judged `vvp` run.
 ///
@@ -270,20 +240,23 @@ pub fn drive(request: &Drive, mode: Mode) -> Result<(), DriveError> {
         }
     }
 
-    if let Some(note) = plan_note(std::env::var("ORBIT_BLUEPRINT_PLAN").ok().as_deref()) {
+    if let Some(note) = plan_note(
+        "iverilog",
+        std::env::var("ORBIT_BLUEPRINT_PLAN").ok().as_deref(),
+    ) {
         eprintln!("{note}");
     }
 
     let text = fs::read_to_string(&request.blueprint).map_err(|source| {
-        let e = ghdl::BlueprintError::Read {
+        let e = BlueprintError::Read {
             path: request.blueprint.clone(),
             source,
         };
         eprintln!("orbit-contracts: iverilog: error: {e}");
         DriveError::Blueprint(e)
     })?;
-    let entries = ghdl::parse_blueprint(&text).map_err(|e| {
-        let e = ghdl::BlueprintError::Parse(e);
+    let entries = parse_blueprint(&text).map_err(|e| {
+        let e = BlueprintError::Parse(e);
         eprintln!("orbit-contracts: iverilog: error: {e}");
         DriveError::Blueprint(e)
     })?;
@@ -378,16 +351,7 @@ fn run_snapshot(roots: &str, extra: &[String], label: &str) -> Result<RunOutcome
     let mut run = Command::new(VVP_BIN);
     run.arg(SNAPSHOT).args(extra);
     let output = capture(VVP_BIN, &mut run).map_err(DriveError::Spawn)?;
-    // The log is both streams joined on their boundary; an empty side
-    // contributes no line, so a quiet run relays no stray blank line.
-    let stdout = lossy(&output.stdout);
-    let stderr = lossy(&output.stderr);
-    let log = match (stdout.is_empty(), stderr.is_empty()) {
-        (true, true) => String::new(),
-        (true, false) => stderr,
-        (false, true) => stdout,
-        (false, false) => format!("{stdout}\n{stderr}"),
-    };
+    let log = join_log(lossy(&output.stdout), lossy(&output.stderr));
     print_block(&log);
     Ok(RunOutcome {
         top: roots.to_string(),
@@ -396,46 +360,10 @@ fn run_snapshot(roots: &str, extra: &[String], label: &str) -> Result<RunOutcome
     })
 }
 
-/// Spawn a command and capture its output, mapping a spawn failure to the
-/// usage-class error.
-fn capture(bin: &str, command: &mut Command) -> Result<Output, String> {
-    command.output().map_err(|e| format!("{bin}: {e}"))
-}
-
-/// The captured bytes as text: iverilog and vvp write UTF-8, and the
-/// verdict must not panic on anything less.
-fn lossy(bytes: &[u8]) -> String {
-    String::from_utf8_lossy(bytes).into_owned()
-}
-
-/// Print a captured block verbatim, guaranteeing one final newline.
-fn print_block(text: &str) {
-    if text.is_empty() {
-        return;
-    }
-    if text.ends_with('\n') {
-        print!("{text}");
-    } else {
-        println!("{text}");
-    }
-}
-
-/// Print a captured block verbatim to stderr, guaranteeing one final
-/// newline.
-fn eprint_block(text: &str) {
-    if text.is_empty() {
-        return;
-    }
-    if text.ends_with('\n') {
-        eprint!("{text}");
-    } else {
-        eprintln!("{text}");
-    }
-}
-
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::blueprint::MalformedLine;
 
     // The probed $fatal fixture (vvp 12.0, 2026-11-07): the run stops,
     // exit 1. Byte-for-byte as recorded live; the faces land on stdout.
@@ -537,7 +465,7 @@ tb_warn.v:6: $finish called at 1 (1s)
     #[test]
     fn drive_errors_map_to_honest_exit_codes() {
         assert_eq!(
-            DriveError::Blueprint(ghdl::BlueprintError::Read {
+            DriveError::Blueprint(BlueprintError::Read {
                 path: std::path::Path::new("nope").to_path_buf(),
                 source: std::io::Error::new(std::io::ErrorKind::NotFound, "nope"),
             })
@@ -545,7 +473,7 @@ tb_warn.v:6: $finish called at 1 (1s)
             2
         );
         assert_eq!(
-            DriveError::Blueprint(ghdl::BlueprintError::Parse(ghdl::MalformedLine {
+            DriveError::Blueprint(BlueprintError::Parse(MalformedLine {
                 line: 1,
                 text: "VLOG\twork".to_string(),
             }))
@@ -579,9 +507,9 @@ tb_warn.v:6: $finish called at 1 (1s)
 
     #[test]
     fn the_plan_note_fires_only_off_tsv() {
-        assert!(plan_note(Some("tsv")).is_none());
-        assert!(plan_note(None).is_none());
-        let note = plan_note(Some("json")).unwrap();
+        assert!(plan_note("iverilog", Some("tsv")).is_none());
+        assert!(plan_note("iverilog", None).is_none());
+        let note = plan_note("iverilog", Some("json")).unwrap();
         assert!(
             note.contains("json"),
             "the note should name the plan: {note}"

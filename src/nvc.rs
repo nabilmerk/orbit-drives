@@ -11,10 +11,11 @@
 //! `nvc` (elaborate, run, judge).
 //!
 //! The TSV blueprint is orbit's plan format and the deferral loop is
-//! order-independence machinery, not ghdl's: both live in [`crate::ghdl`]
-//! with the first drive that carried them, and both drives share them.
-//! Everything that is genuinely nvc's -- the argv shape, the library
-//! state, the faces -- is probed and pinned here.
+//! order-independence machinery, not ghdl's: the blueprint machinery
+//! lives in [`crate::blueprint`], and the deferral loop lives in
+//! [`crate::ghdl`] with the first drive that carried it -- both drives
+//! share them. Everything that is genuinely nvc's -- the argv shape, the
+//! library state, the faces -- is probed and pinned here.
 //!
 //! The judge gates the sim face as second witness, not first: nvc's exits
 //! probed honest across every failure face (a `severity error` run
@@ -24,10 +25,14 @@
 use std::fmt;
 use std::fs;
 use std::path::Path;
-use std::process::{Command, Output};
+use std::process::Command;
 
+use crate::blueprint::{
+    parse_blueprint, plan_note, vhdl_only, BlueprintError, Drive, Mode, NotCarried,
+};
 use crate::contracts::{self, Tool};
-use crate::ghdl::{self, Drive, Mode};
+use crate::ghdl::{self, AnalyzeReport};
+use crate::proc::{capture, eprint_block, join_log, lossy, print_block};
 
 /// The nvc binary the drive spawns, resolved on PATH. The orbit target
 /// contract carries no binary-path field.
@@ -98,17 +103,17 @@ impl RunOutcome {
 #[derive(Debug)]
 pub enum DriveError {
     /// The blueprint could not be read or parsed: usage-class, exit 2.
-    Blueprint(ghdl::BlueprintError),
+    Blueprint(BlueprintError),
     /// The blueprint carried filesets the drive does not speak yet:
     /// usage-class, exit 2.
-    NotCarried(ghdl::NotCarried),
+    NotCarried(NotCarried),
     /// nvc could not be spawned at all: usage-class, exit 2.
     Spawn(String),
     /// The stale work library could not be wiped: usage-class, exit 2.
     Library(String),
     /// Files never analyzed after the deferral loop exhausted: findings,
     /// exit 1.
-    Analyze(ghdl::AnalyzeReport),
+    Analyze(AnalyzeReport),
     /// A top failed to elaborate: findings, exit 1.
     Elaborate {
         /// The top unit nvc refused.
@@ -168,20 +173,6 @@ impl std::error::Error for DriveError {
     }
 }
 
-/// The note for a blueprint plan the drive does not carry: orbit exports
-/// `$ORBIT_BLUEPRINT_PLAN` as the plan it wrote, and the drive speaks the
-/// TSV plan only. Loud but non-fatal -- the file is still read as TSV
-/// lines, and a non-TSV file fails the parse loudly right after.
-fn plan_note(plan: Option<&str>) -> Option<String> {
-    match plan {
-        Some(plan) if plan != "tsv" => Some(format!(
-            "orbit-contracts: nvc: note: $ORBIT_BLUEPRINT_PLAN is {plan:?}; the drive \
-             carries the TSV plan only, reading the blueprint as TSV lines"
-        )),
-        _ => None,
-    }
-}
-
 /// Drive the nvc target end to end: blueprint, analyze, elaborate, and --
 /// on the sim face -- run and judge.
 ///
@@ -199,7 +190,7 @@ pub fn drive(request: &Drive, mode: Mode) -> Result<(), DriveError> {
     let label = mode.label();
     // nvc must be spawnable before anything else, so a missing binary is
     // a loud usage error instead of a deferral-loop residual.
-    capture(Command::new(NVC_BIN).arg("--version")).map_err(DriveError::Spawn)?;
+    capture(NVC_BIN, Command::new(NVC_BIN).arg("--version")).map_err(DriveError::Spawn)?;
 
     // Run-scoped library state: see `WORK_LIBRARY_DIR`. Every drive
     // starts from an empty library, so a second run in the same
@@ -212,24 +203,24 @@ pub fn drive(request: &Drive, mode: Mode) -> Result<(), DriveError> {
         }
     }
 
-    if let Some(note) = plan_note(std::env::var("ORBIT_BLUEPRINT_PLAN").ok().as_deref()) {
+    if let Some(note) = plan_note("nvc", std::env::var("ORBIT_BLUEPRINT_PLAN").ok().as_deref()) {
         eprintln!("{note}");
     }
 
     let text = fs::read_to_string(&request.blueprint).map_err(|source| {
-        let e = ghdl::BlueprintError::Read {
+        let e = BlueprintError::Read {
             path: request.blueprint.clone(),
             source,
         };
         eprintln!("orbit-contracts: nvc: error: {e}");
         DriveError::Blueprint(e)
     })?;
-    let entries = ghdl::parse_blueprint(&text).map_err(|e| {
-        let e = ghdl::BlueprintError::Parse(e);
+    let entries = parse_blueprint(&text).map_err(|e| {
+        let e = BlueprintError::Parse(e);
         eprintln!("orbit-contracts: nvc: error: {e}");
         DriveError::Blueprint(e)
     })?;
-    let files = ghdl::vhdl_only(&entries).map_err(|e| {
+    let files = vhdl_only(&entries).map_err(|e| {
         eprintln!("orbit-contracts: nvc: error: {e}");
         DriveError::NotCarried(e)
     })?;
@@ -278,7 +269,7 @@ pub fn drive(request: &Drive, mode: Mode) -> Result<(), DriveError> {
         if mode == Mode::Build {
             elaborate.args(&request.extra);
         }
-        let output = capture(&mut elaborate).map_err(DriveError::Spawn)?;
+        let output = capture(NVC_BIN, &mut elaborate).map_err(DriveError::Spawn)?;
         if !output.status.success() {
             let stderr = lossy(&output.stderr);
             eprint_block(&stderr);
@@ -331,17 +322,8 @@ fn run_top(top: &str, extra: &[String], label: &str) -> Result<RunOutcome, Drive
     println!("orbit-contracts: nvc: {label}: running {top}");
     let mut run = Command::new(NVC_BIN);
     run.arg(STD).arg("-r").arg(top).args(extra);
-    let output = capture(&mut run).map_err(DriveError::Spawn)?;
-    // The log is both streams joined on their boundary; an empty side
-    // contributes no line, so a quiet run relays no stray blank line.
-    let stdout = lossy(&output.stdout);
-    let stderr = lossy(&output.stderr);
-    let log = match (stdout.is_empty(), stderr.is_empty()) {
-        (true, true) => String::new(),
-        (true, false) => stderr,
-        (false, true) => stdout,
-        (false, false) => format!("{stdout}\n{stderr}"),
-    };
+    let output = capture(NVC_BIN, &mut run).map_err(DriveError::Spawn)?;
+    let log = join_log(lossy(&output.stdout), lossy(&output.stderr));
     print_block(&log);
     Ok(RunOutcome {
         top: top.to_string(),
@@ -356,53 +338,17 @@ fn run_top(top: &str, extra: &[String], label: &str) -> Result<RunOutcome, Drive
 fn analyze_once(file: &Path) -> Result<(), String> {
     let mut command = Command::new(NVC_BIN);
     command.arg(STD).arg("-a").arg(file);
-    match capture(&mut command) {
+    match capture(NVC_BIN, &mut command) {
         Ok(output) if output.status.success() => Ok(()),
         Ok(output) => Err(lossy(&output.stderr)),
         Err(message) => Err(message),
     }
 }
 
-/// Spawn a command and capture its output, mapping a spawn failure to the
-/// usage-class error.
-fn capture(command: &mut Command) -> Result<Output, String> {
-    command.output().map_err(|e| format!("{NVC_BIN}: {e}"))
-}
-
-/// The captured bytes as text: nvc writes UTF-8, and the verdict must not
-/// panic on anything less.
-fn lossy(bytes: &[u8]) -> String {
-    String::from_utf8_lossy(bytes).into_owned()
-}
-
-/// Print a captured block verbatim, guaranteeing one final newline.
-fn print_block(text: &str) {
-    if text.is_empty() {
-        return;
-    }
-    if text.ends_with('\n') {
-        print!("{text}");
-    } else {
-        println!("{text}");
-    }
-}
-
-/// Print a captured block verbatim to stderr, guaranteeing one final
-/// newline.
-fn eprint_block(text: &str) {
-    if text.is_empty() {
-        return;
-    }
-    if text.ends_with('\n') {
-        eprint!("{text}");
-    } else {
-        eprintln!("{text}");
-    }
-}
-
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::blueprint::MalformedLine;
 
     // The probed severity-failure fixture (nvc 1.23.0, 2026-11-07): the
     // run stops, exit 1. Byte-for-byte as recorded live.
@@ -485,7 +431,7 @@ mod tests {
     #[test]
     fn drive_errors_map_to_honest_exit_codes() {
         assert_eq!(
-            DriveError::Blueprint(ghdl::BlueprintError::Read {
+            DriveError::Blueprint(BlueprintError::Read {
                 path: Path::new("nope").to_path_buf(),
                 source: std::io::Error::new(std::io::ErrorKind::NotFound, "nope"),
             })
@@ -493,7 +439,7 @@ mod tests {
             2
         );
         assert_eq!(
-            DriveError::Blueprint(ghdl::BlueprintError::Parse(ghdl::MalformedLine {
+            DriveError::Blueprint(BlueprintError::Parse(MalformedLine {
                 line: 1,
                 text: "VHDL\twork".to_string(),
             }))
@@ -501,7 +447,7 @@ mod tests {
             2
         );
         assert_eq!(
-            DriveError::NotCarried(ghdl::NotCarried {
+            DriveError::NotCarried(NotCarried {
                 entries: Vec::new()
             })
             .exit_code(),
@@ -516,7 +462,7 @@ mod tests {
             2
         );
         assert_eq!(
-            DriveError::Analyze(ghdl::AnalyzeReport {
+            DriveError::Analyze(AnalyzeReport {
                 analyzed: Vec::new(),
                 residual: Vec::new(),
                 passes: 0,
@@ -537,9 +483,9 @@ mod tests {
 
     #[test]
     fn the_plan_note_fires_only_off_tsv() {
-        assert!(plan_note(Some("tsv")).is_none());
-        assert!(plan_note(None).is_none());
-        let note = plan_note(Some("json")).unwrap();
+        assert!(plan_note("nvc", Some("tsv")).is_none());
+        assert!(plan_note("nvc", None).is_none());
+        let note = plan_note("nvc", Some("json")).unwrap();
         assert!(
             note.contains("json"),
             "the note should name the plan: {note}"

@@ -12,6 +12,10 @@
 //! probed honest so far, and there the judge is the second witness. Either
 //! witness convicts, everywhere.
 //!
+//! - [`blueprint`]: the shared machinery -- the TSV blueprint parse, the
+//!   argv-level request view, and the fileset filters.
+//! - [`proc`]: the shared process plumbing -- spawn-and-capture, the log
+//!   join, the verbatim block relays.
 //! - [`contracts`]: the per-tool vocabularies and the judge.
 //! - [`ghdl`]: the ghdl target drives -- blueprint in, judged verdict out.
 //! - [`nvc`]: the nvc target drives -- the same shapes, nvc's probed faces.
@@ -20,8 +24,15 @@
 //! - [`verilator`]: the verilator target drives -- one lint, per-top
 //!   model builds, judged model runs.
 
+pub mod blueprint;
 pub mod contracts;
 pub mod ghdl;
 pub mod iverilog;
 pub mod nvc;
+pub mod proc;
 pub mod verilator;
+
+pub use blueprint::{
+    parse_blueprint, verilog_only, vhdl_only, BlueprintError, Drive, Entry, MalformedLine, Mode,
+    NotCarried,
+};

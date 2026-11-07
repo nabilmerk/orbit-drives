@@ -13,13 +13,22 @@
 //! `severity error` check (exit 0), and the face in the log is the only
 //! witness. The build face needs no judge: `ghdl -a` and `ghdl -e` exit
 //! nonzero on a broken design (probed live), so the exit is honest there.
+//!
+//! The blueprint parse, the request view, and the fileset filter are the
+//! shared machinery of [`crate::blueprint`]; what lives here is ghdl's
+//! own process -- the deferral loop (shared with the nvc drive, which
+//! still borrows it from this first drive that carried it), the library
+//! wipe, the run, and the judge.
 
-use std::fmt;
 use std::fs;
 use std::path::{Path, PathBuf};
-use std::process::{Command, Output};
+use std::process::Command;
 
+use crate::blueprint::{
+    parse_blueprint, plan_note, vhdl_only, BlueprintError, Drive, Mode, NotCarried,
+};
 use crate::contracts::{self, Tool};
+use crate::proc::{capture, eprint_block, join_log, lossy, print_block};
 
 /// The ghdl binary the drive spawns, resolved on PATH. The orbit target
 /// contract carries no binary-path field.
@@ -38,35 +47,6 @@ pub const STD: &str = "--std=08";
 /// land in the log either way.
 pub const ASSERT_LEVEL: &str = "--assert-level=error";
 
-/// What the drive runs: the build face stops after the elaborations, the
-/// sim face adds the judged run. Every carried tool's drive splits this
-/// way -- one [`Mode`], two orbit target entries per tool.
-#[derive(Clone, Copy, Debug, PartialEq, Eq)]
-pub enum Mode {
-    /// The `*-build` targets: analyze the blueprint in order, elaborate
-    /// each top, exit honest. NO simulation: there is no run, no run log,
-    /// and nothing judged. Analysis and elaboration need no log gate
-    /// (both exit nonzero on a broken design, probed live on ghdl 6.0.0
-    /// and nvc 1.23.0), so on this face the exit is the only witness --
-    /// the judge exists for the sim face, whose ghdl exit lies.
-    Build,
-    /// The `ghdl` / `nvc` targets: elaborate and run each top, gating
-    /// every run log on the probed vocabulary AND the exit. Either
-    /// witness convicts.
-    Sim,
-}
-
-impl Mode {
-    /// The word the drive stamps into its progress lines, so an orbit log
-    /// says which face ran.
-    pub(crate) fn label(self) -> &'static str {
-        match self {
-            Mode::Build => "build",
-            Mode::Sim => "sim",
-        }
-    }
-}
-
 /// The work library file ghdl writes into the working directory for
 /// `--std=08` (ghdl names it after the standard: `-obj08`). It is ghdl's
 /// clock.
@@ -80,151 +60,6 @@ impl Mode {
 /// "gate"`, probed live on ghdl 6.0.0, 2026-11-07). Correctness before
 /// incrementality in v1: every drive starts from an empty library.
 pub const WORK_LIBRARY_FILE: &str = "work-obj08.cf";
-
-/// One entry of the blueprint: a fileset, a library, and the file's path.
-#[derive(Clone, Debug, PartialEq, Eq)]
-pub struct Entry {
-    /// The 1-based blueprint line the entry came from.
-    pub line: usize,
-    /// The fileset orbit filed the file under (`VHDL`, `VLOG`, `SYSV`, or
-    /// a custom fileset).
-    pub fileset: String,
-    /// The orbit library the file belongs to. Carried but not yet mapped:
-    /// v1 analyzes every file into ghdl's `work` library.
-    pub library: String,
-    /// The file path, as the blueprint wrote it.
-    pub path: PathBuf,
-}
-
-/// The error for a blueprint line that is not
-/// `fileset<TAB>library<TAB>filepath`.
-#[derive(Clone, Debug, PartialEq, Eq)]
-pub struct MalformedLine {
-    /// The 1-based blueprint line number.
-    pub line: usize,
-    /// The offending line's text, line terminator stripped.
-    pub text: String,
-}
-
-impl fmt::Display for MalformedLine {
-    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
-        write!(
-            f,
-            "blueprint line {} is not fileset<TAB>library<TAB>filepath: {:?}",
-            self.line, self.text
-        )
-    }
-}
-
-impl std::error::Error for MalformedLine {}
-
-/// The error for a blueprint the drive could not read or parse.
-#[derive(Debug)]
-pub enum BlueprintError {
-    /// The blueprint file could not be read.
-    Read {
-        /// The blueprint path, as the drive was handed it.
-        path: PathBuf,
-        /// The read failure.
-        source: std::io::Error,
-    },
-    /// A line was not `fileset<TAB>library<TAB>filepath`.
-    Parse(MalformedLine),
-}
-
-impl fmt::Display for BlueprintError {
-    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
-        match self {
-            BlueprintError::Read { path, source } => {
-                write!(f, "cannot read {}: {source}", path.display())
-            }
-            BlueprintError::Parse(e) => write!(f, "{e}"),
-        }
-    }
-}
-
-impl std::error::Error for BlueprintError {
-    fn source(&self) -> Option<&(dyn std::error::Error + 'static)> {
-        match self {
-            BlueprintError::Read { source, .. } => Some(source),
-            BlueprintError::Parse(e) => Some(e),
-        }
-    }
-}
-
-/// Parse the TSV blueprint text into entries, in file order.
-///
-/// Blank lines are skipped; anything else must carry exactly three
-/// tab-separated fields.
-pub fn parse_blueprint(text: &str) -> Result<Vec<Entry>, MalformedLine> {
-    let mut entries = Vec::new();
-    for (index, raw) in text.lines().enumerate() {
-        let line = raw.strip_suffix('\r').unwrap_or(raw);
-        if line.is_empty() {
-            continue;
-        }
-        let fields: Vec<&str> = line.split('\t').collect();
-        if fields.len() != 3 {
-            return Err(MalformedLine {
-                line: index + 1,
-                text: line.to_string(),
-            });
-        }
-        entries.push(Entry {
-            line: index + 1,
-            fileset: fields[0].to_string(),
-            library: fields[1].to_string(),
-            path: PathBuf::from(fields[2]),
-        });
-    }
-    Ok(entries)
-}
-
-/// The error for blueprint filesets the ghdl drive does not carry.
-#[derive(Clone, Debug, PartialEq, Eq)]
-pub struct NotCarried {
-    /// Every non-VHDL entry, in blueprint order.
-    pub entries: Vec<Entry>,
-}
-
-impl fmt::Display for NotCarried {
-    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
-        write!(
-            f,
-            "the ghdl drive carries the VHDL fileset only; not yet carried:"
-        )?;
-        for entry in &self.entries {
-            write!(
-                f,
-                " {} (blueprint line {}, {})",
-                entry.fileset,
-                entry.line,
-                entry.path.display()
-            )?;
-        }
-        Ok(())
-    }
-}
-
-impl std::error::Error for NotCarried {}
-
-/// The VHDL files of the blueprint, in blueprint order.
-///
-/// Every non-VHDL entry -- `VLOG`, `SYSV`, a custom fileset -- is rejected
-/// loudly: mixed-language designs stay outside this drive's contract, and
-/// a silent skip would leave files the user believes were simulated.
-pub fn vhdl_only(entries: &[Entry]) -> Result<Vec<PathBuf>, NotCarried> {
-    let foreign: Vec<Entry> = entries
-        .iter()
-        .filter(|entry| entry.fileset != "VHDL")
-        .cloned()
-        .collect();
-    if foreign.is_empty() {
-        Ok(entries.iter().map(|entry| entry.path.clone()).collect())
-    } else {
-        Err(NotCarried { entries: foreign })
-    }
-}
 
 /// A file that never analyzed, with the stderr of its last attempt.
 #[derive(Clone, Debug, PartialEq, Eq)]
@@ -372,35 +207,6 @@ impl DriveError {
     }
 }
 
-/// Everything argv parsing produced: the drive's own view of the request.
-#[derive(Clone, Debug, PartialEq, Eq)]
-pub struct Drive {
-    /// The blueprint file: the `--blueprint` path or `$ORBIT_BLUEPRINT`.
-    pub blueprint: PathBuf,
-    /// The top units to elaborate and run, in the order given. The caller
-    /// resolves the `$ORBIT_TB_NAME` default; the drive runs what it is
-    /// handed.
-    pub tops: Vec<String>,
-    /// The extra tokens riding each `ghdl -r` argv: orbit appends the
-    /// user's extras with the `--` separator stripped, and the argv
-    /// parser passes through every token the drive does not own.
-    pub extra: Vec<String>,
-}
-
-/// The note for a blueprint plan the drive does not carry: orbit exports
-/// `$ORBIT_BLUEPRINT_PLAN` as the plan it wrote, and the drive speaks the
-/// TSV plan only. Loud but non-fatal -- the file is still read as TSV
-/// lines, and a non-TSV file fails the parse loudly right after.
-fn plan_note(plan: Option<&str>) -> Option<String> {
-    match plan {
-        Some(plan) if plan != "tsv" => Some(format!(
-            "orbit-contracts: ghdl: note: $ORBIT_BLUEPRINT_PLAN is {plan:?}; the drive \
-             carries the TSV plan only, reading the blueprint as TSV lines"
-        )),
-        _ => None,
-    }
-}
-
 /// Drive the ghdl target end to end: blueprint, analyze, elaborate, and
 /// -- on the sim face -- run and judge.
 ///
@@ -416,7 +222,7 @@ pub fn drive(request: &Drive, mode: Mode) -> Result<(), DriveError> {
     let label = mode.label();
     // ghdl must be spawnable before anything else, so a missing binary is
     // a loud usage error instead of a deferral-loop residual.
-    capture(Command::new(GHDL_BIN).arg("--version")).map_err(DriveError::Spawn)?;
+    capture(GHDL_BIN, Command::new(GHDL_BIN).arg("--version")).map_err(DriveError::Spawn)?;
 
     // Run-scoped library state: see `WORK_LIBRARY_FILE`. Every drive
     // starts from an empty library, so a second run in the same
@@ -429,7 +235,10 @@ pub fn drive(request: &Drive, mode: Mode) -> Result<(), DriveError> {
         }
     }
 
-    if let Some(note) = plan_note(std::env::var("ORBIT_BLUEPRINT_PLAN").ok().as_deref()) {
+    if let Some(note) = plan_note(
+        "ghdl",
+        std::env::var("ORBIT_BLUEPRINT_PLAN").ok().as_deref(),
+    ) {
         eprintln!("{note}");
     }
 
@@ -491,7 +300,7 @@ pub fn drive(request: &Drive, mode: Mode) -> Result<(), DriveError> {
         if mode == Mode::Build {
             elaborate.args(&request.extra);
         }
-        let output = capture(&mut elaborate).map_err(DriveError::Spawn)?;
+        let output = capture(GHDL_BIN, &mut elaborate).map_err(DriveError::Spawn)?;
         if !output.status.success() {
             let stderr = lossy(&output.stderr);
             eprint_block(&stderr);
@@ -543,17 +352,8 @@ fn run_top(top: &str, extra: &[String], label: &str) -> Result<RunOutcome, Drive
     // simulation option, and ghdl rejects it anywhere earlier.
     let mut run = Command::new(GHDL_BIN);
     run.args(["-r", STD]).arg(top).arg(ASSERT_LEVEL).args(extra);
-    let output = capture(&mut run).map_err(DriveError::Spawn)?;
-    // The log is both streams joined on their boundary; an empty side
-    // contributes no line, so a quiet run relays no stray blank line.
-    let stdout = lossy(&output.stdout);
-    let stderr = lossy(&output.stderr);
-    let log = match (stdout.is_empty(), stderr.is_empty()) {
-        (true, true) => String::new(),
-        (true, false) => stderr,
-        (false, true) => stdout,
-        (false, false) => format!("{stdout}\n{stderr}"),
-    };
+    let output = capture(GHDL_BIN, &mut run).map_err(DriveError::Spawn)?;
+    let log = join_log(lossy(&output.stdout), lossy(&output.stderr));
     print_block(&log);
     Ok(RunOutcome {
         top: top.to_string(),
@@ -567,53 +367,17 @@ fn run_top(top: &str, extra: &[String], label: &str) -> Result<RunOutcome, Drive
 fn analyze_once(file: &Path) -> Result<(), String> {
     let mut command = Command::new(GHDL_BIN);
     command.args(["-a", STD]).arg(file);
-    match capture(&mut command) {
+    match capture(GHDL_BIN, &mut command) {
         Ok(output) if output.status.success() => Ok(()),
         Ok(output) => Err(lossy(&output.stderr)),
         Err(message) => Err(message),
     }
 }
 
-/// Spawn a command and capture its output, mapping a spawn failure to the
-/// usage-class error.
-fn capture(command: &mut Command) -> Result<Output, String> {
-    command.output().map_err(|e| format!("{GHDL_BIN}: {e}"))
-}
-
-/// The captured bytes as text: ghdl writes UTF-8, and the verdict must not
-/// panic on anything less.
-fn lossy(bytes: &[u8]) -> String {
-    String::from_utf8_lossy(bytes).into_owned()
-}
-
-/// Print a captured block verbatim, guaranteeing one final newline.
-fn print_block(text: &str) {
-    if text.is_empty() {
-        return;
-    }
-    if text.ends_with('\n') {
-        print!("{text}");
-    } else {
-        println!("{text}");
-    }
-}
-
-/// Print a captured block verbatim to stderr, guaranteeing one final
-/// newline.
-fn eprint_block(text: &str) {
-    if text.is_empty() {
-        return;
-    }
-    if text.ends_with('\n') {
-        eprint!("{text}");
-    } else {
-        eprintln!("{text}");
-    }
-}
-
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::blueprint::MalformedLine;
 
     // The provider and consumer of the order-dependence fixture: the
     // consumer references the provider's unit, so ghdl cannot analyze the
@@ -725,54 +489,6 @@ tb_err.vhd:9:5:@0ms:(report note): simulation continued
         assert_eq!(report.passes, 0);
         assert!(report.analyzed.is_empty());
         assert!(report.residual.is_empty());
-    }
-
-    #[test]
-    fn blueprint_parses_the_tsv_plan_in_file_order() {
-        let text = "VHDL\twork\t./gate.vhd\nVHDL\twork\t./top.vhd\n";
-        let entries = parse_blueprint(text).unwrap();
-        assert_eq!(entries.len(), 2);
-        assert_eq!(entries[0].line, 1);
-        assert_eq!(entries[0].fileset, "VHDL");
-        assert_eq!(entries[0].library, "work");
-        assert_eq!(entries[0].path, PathBuf::from("./gate.vhd"));
-        assert_eq!(entries[1].line, 2);
-        assert_eq!(entries[1].path, PathBuf::from("./top.vhd"));
-    }
-
-    #[test]
-    fn blueprint_skips_blank_lines_and_strips_carriage_returns() {
-        let text = "VHDL\twork\t./a.vhd\r\n\nVHDL\twork\t./b.vhd\n";
-        let entries = parse_blueprint(text).unwrap();
-        assert_eq!(entries.len(), 2);
-        assert_eq!(entries[0].path, PathBuf::from("./a.vhd"));
-        assert_eq!(entries[1].line, 3);
-    }
-
-    #[test]
-    fn blueprint_rejects_a_short_line_loudly() {
-        let err = parse_blueprint("VHDL\twork\t./a.vhd\nVHDL\twork\n").unwrap_err();
-        assert_eq!(err.line, 2);
-        assert_eq!(err.text, "VHDL\twork");
-    }
-
-    #[test]
-    fn blueprint_rejects_an_extra_field_loudly() {
-        let err = parse_blueprint("VHDL\twork\t./a.vhd\textra\n").unwrap_err();
-        assert_eq!(err.line, 1);
-    }
-
-    #[test]
-    fn the_drive_carries_vhdl_only_and_names_the_rest() {
-        let entries =
-            parse_blueprint("VHDL\twork\t./a.vhd\nVLOG\twork\t./b.v\nSYSV\twork\t./c.sv\n")
-                .unwrap();
-        let err = vhdl_only(&entries).unwrap_err();
-        assert_eq!(err.entries.len(), 2);
-        assert_eq!(err.entries[0].fileset, "VLOG");
-        assert_eq!(err.entries[1].fileset, "SYSV");
-        let carried = parse_blueprint("VHDL\twork\t./a.vhd\n").unwrap();
-        assert_eq!(vhdl_only(&carried).unwrap(), vec![PathBuf::from("./a.vhd")]);
     }
 
     #[test]

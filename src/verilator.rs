@@ -30,11 +30,12 @@
 
 use std::fmt;
 use std::fs;
-use std::process::{Command, Output};
+use std::process::Command;
 
+use crate::blueprint::{parse_blueprint, plan_note, verilog_only, BlueprintError, Drive, Mode};
 use crate::contracts::{self, Tool};
-use crate::ghdl::{self, Drive, Mode};
-use crate::iverilog::{self, NotCarried};
+use crate::iverilog::NotCarried;
+use crate::proc::{capture, eprint_block, join_log, lossy, print_block};
 
 /// The verilator binary the drive spawns, resolved on PATH. The orbit
 /// target contract carries no binary-path field.
@@ -101,7 +102,7 @@ impl RunOutcome {
 #[derive(Debug)]
 pub enum DriveError {
     /// The blueprint could not be read or parsed: usage-class, exit 2.
-    Blueprint(ghdl::BlueprintError),
+    Blueprint(BlueprintError),
     /// The blueprint carried filesets the drive does not speak yet:
     /// usage-class, exit 2.
     NotCarried(NotCarried),
@@ -171,20 +172,6 @@ impl std::error::Error for DriveError {
     }
 }
 
-/// The note for a blueprint plan the drive does not carry: orbit exports
-/// `$ORBIT_BLUEPRINT_PLAN` as the plan it wrote, and the drive speaks the
-/// TSV plan only. Loud but non-fatal -- the file is still read as TSV
-/// lines, and a non-TSV file fails the parse loudly right after.
-fn plan_note(plan: Option<&str>) -> Option<String> {
-    match plan {
-        Some(plan) if plan != "tsv" => Some(format!(
-            "orbit-contracts: verilator: note: $ORBIT_BLUEPRINT_PLAN is {plan:?}; the drive \
-             carries the TSV plan only, reading the blueprint as TSV lines"
-        )),
-        _ => None,
-    }
-}
-
 /// Drive the verilator target end to end: blueprint, one lint, per-top
 /// model builds, and -- on the sim face -- judged model runs.
 ///
@@ -221,27 +208,31 @@ pub fn drive(request: &Drive, mode: Mode) -> Result<(), DriveError> {
         }
     }
 
-    if let Some(note) = plan_note(std::env::var("ORBIT_BLUEPRINT_PLAN").ok().as_deref()) {
+    if let Some(note) = plan_note(
+        "verilator",
+        std::env::var("ORBIT_BLUEPRINT_PLAN").ok().as_deref(),
+    ) {
         eprintln!("{note}");
     }
 
     let text = fs::read_to_string(&request.blueprint).map_err(|source| {
-        let e = ghdl::BlueprintError::Read {
+        let e = BlueprintError::Read {
             path: request.blueprint.clone(),
             source,
         };
         eprintln!("orbit-contracts: verilator: error: {e}");
         DriveError::Blueprint(e)
     })?;
-    let entries = ghdl::parse_blueprint(&text).map_err(|e| {
-        let e = ghdl::BlueprintError::Parse(e);
+    let entries = parse_blueprint(&text).map_err(|e| {
+        let e = BlueprintError::Parse(e);
         eprintln!("orbit-contracts: verilator: error: {e}");
         DriveError::Blueprint(e)
     })?;
     // The fileset door is the Verilog drives' shared one: iverilog and
-    // verilator carry the same VLOG and SYSV filesets, so the filter and
-    // its message live with the first Verilog drive.
-    let files = iverilog::verilog_only(&entries).map_err(|e| {
+    // verilator carry the same VLOG and SYSV filesets -- the filter lives
+    // with the blueprint machinery, its message with the first Verilog
+    // drive.
+    let files = verilog_only(&entries).map_err(|e| {
         eprintln!("orbit-contracts: verilator: error: {e}");
         DriveError::NotCarried(e)
     })?;
@@ -376,16 +367,7 @@ fn run_model(top: &str, extra: &[String], label: &str) -> Result<RunOutcome, Dri
     let mut run = Command::new(&model);
     run.args(extra);
     let output = capture(&model, &mut run).map_err(DriveError::Spawn)?;
-    // The log is both streams joined on their boundary; an empty side
-    // contributes no line, so a quiet run relays no stray blank line.
-    let stdout = lossy(&output.stdout);
-    let stderr = lossy(&output.stderr);
-    let log = match (stdout.is_empty(), stderr.is_empty()) {
-        (true, true) => String::new(),
-        (true, false) => stderr,
-        (false, true) => stdout,
-        (false, false) => format!("{stdout}\n{stderr}"),
-    };
+    let log = join_log(lossy(&output.stdout), lossy(&output.stderr));
     print_block(&log);
     Ok(RunOutcome {
         top: top.to_string(),
@@ -394,47 +376,10 @@ fn run_model(top: &str, extra: &[String], label: &str) -> Result<RunOutcome, Dri
     })
 }
 
-/// Spawn a command and capture its output, mapping a spawn failure to the
-/// usage-class error. The name is the failing binary's own: `verilator`
-/// for the lint and build steps, the model path for the run step.
-fn capture(bin: &str, command: &mut Command) -> Result<Output, String> {
-    command.output().map_err(|e| format!("{bin}: {e}"))
-}
-
-/// The captured bytes as text: verilator and its models write UTF-8, and
-/// the verdict must not panic on anything less.
-fn lossy(bytes: &[u8]) -> String {
-    String::from_utf8_lossy(bytes).into_owned()
-}
-
-/// Print a captured block verbatim, guaranteeing one final newline.
-fn print_block(text: &str) {
-    if text.is_empty() {
-        return;
-    }
-    if text.ends_with('\n') {
-        print!("{text}");
-    } else {
-        println!("{text}");
-    }
-}
-
-/// Print a captured block verbatim to stderr, guaranteeing one final
-/// newline.
-fn eprint_block(text: &str) {
-    if text.is_empty() {
-        return;
-    }
-    if text.ends_with('\n') {
-        eprint!("{text}");
-    } else {
-        eprintln!("{text}");
-    }
-}
-
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::blueprint::MalformedLine;
 
     // The probed $fatal fixture (verilator 5.032, 2026-11-07): the model
     // prints the %Fatal face, the %Error $stop line, and `Aborting...`,
@@ -572,7 +517,7 @@ all quiet
     #[test]
     fn drive_errors_map_to_honest_exit_codes() {
         assert_eq!(
-            DriveError::Blueprint(ghdl::BlueprintError::Read {
+            DriveError::Blueprint(BlueprintError::Read {
                 path: std::path::Path::new("nope").to_path_buf(),
                 source: std::io::Error::new(std::io::ErrorKind::NotFound, "nope"),
             })
@@ -580,7 +525,7 @@ all quiet
             2
         );
         assert_eq!(
-            DriveError::Blueprint(ghdl::BlueprintError::Parse(ghdl::MalformedLine {
+            DriveError::Blueprint(BlueprintError::Parse(MalformedLine {
                 line: 1,
                 text: "VLOG\twork".to_string(),
             }))
@@ -622,9 +567,9 @@ all quiet
 
     #[test]
     fn the_plan_note_fires_only_off_tsv() {
-        assert!(plan_note(Some("tsv")).is_none());
-        assert!(plan_note(None).is_none());
-        let note = plan_note(Some("json")).unwrap();
+        assert!(plan_note("verilator", Some("tsv")).is_none());
+        assert!(plan_note("verilator", None).is_none());
+        let note = plan_note("verilator", Some("json")).unwrap();
         assert!(
             note.contains("json"),
             "the note should name the plan: {note}"

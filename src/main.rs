@@ -20,7 +20,7 @@ use std::env;
 use std::path::PathBuf;
 use std::process::ExitCode;
 
-use orbit_contracts::{ghdl, iverilog, nvc, verilator};
+use orbit_contracts::{blueprint, ghdl, iverilog, nvc, verilator};
 
 const USAGE: &str = "\
 orbit-contracts: the probed failure vocabularies and the honest-exit targets for orbit
@@ -128,16 +128,16 @@ enum Subcommand {
 impl Subcommand {
     /// The drive mode the subcommand picks: how far the tool's shared
     /// drive goes.
-    fn mode(self) -> ghdl::Mode {
+    fn mode(self) -> blueprint::Mode {
         match self {
             Subcommand::GhdlBuild
             | Subcommand::NvcBuild
             | Subcommand::IverilogBuild
-            | Subcommand::VerilatorBuild => ghdl::Mode::Build,
+            | Subcommand::VerilatorBuild => blueprint::Mode::Build,
             Subcommand::GhdlSim
             | Subcommand::NvcSim
             | Subcommand::IverilogSim
-            | Subcommand::VerilatorSim => ghdl::Mode::Sim,
+            | Subcommand::VerilatorSim => blueprint::Mode::Sim,
         }
     }
 }
@@ -298,7 +298,7 @@ fn drive_request(request: Request) -> ExitCode {
     }
     let outcome = match request.subcommand {
         Subcommand::GhdlBuild | Subcommand::GhdlSim => ghdl::drive(
-            &ghdl::Drive {
+            &blueprint::Drive {
                 blueprint,
                 tops,
                 extra: request.extra,
@@ -307,7 +307,7 @@ fn drive_request(request: Request) -> ExitCode {
         )
         .map_err(|e| e.exit_code()),
         Subcommand::NvcBuild | Subcommand::NvcSim => nvc::drive(
-            &ghdl::Drive {
+            &blueprint::Drive {
                 blueprint,
                 tops,
                 extra: request.extra,
@@ -316,7 +316,7 @@ fn drive_request(request: Request) -> ExitCode {
         )
         .map_err(|e| e.exit_code()),
         Subcommand::IverilogBuild | Subcommand::IverilogSim => iverilog::drive(
-            &ghdl::Drive {
+            &blueprint::Drive {
                 blueprint,
                 tops,
                 extra: request.extra,
@@ -325,7 +325,7 @@ fn drive_request(request: Request) -> ExitCode {
         )
         .map_err(|e| e.exit_code()),
         Subcommand::VerilatorBuild | Subcommand::VerilatorSim => verilator::drive(
-            &ghdl::Drive {
+            &blueprint::Drive {
                 blueprint,
                 tops,
                 extra: request.extra,
@@ -387,28 +387,28 @@ mod tests {
         // the drive with `ghdl` but stops after the elaborations.
         let request = run_of(parse(&argv(&["ghdl-build", "--top", "tb"])).unwrap());
         assert_eq!(request.subcommand, Subcommand::GhdlBuild);
-        assert_eq!(request.subcommand.mode(), ghdl::Mode::Build);
+        assert_eq!(request.subcommand.mode(), blueprint::Mode::Build);
     }
 
     #[test]
     fn ghdl_drives_the_sim_face() {
         let request = run_of(parse(&argv(&["ghdl", "--top", "tb"])).unwrap());
         assert_eq!(request.subcommand, Subcommand::GhdlSim);
-        assert_eq!(request.subcommand.mode(), ghdl::Mode::Sim);
+        assert_eq!(request.subcommand.mode(), blueprint::Mode::Sim);
     }
 
     #[test]
     fn nvc_build_is_its_own_subcommand_driving_the_build_face() {
         let request = run_of(parse(&argv(&["nvc-build", "--top", "tb"])).unwrap());
         assert_eq!(request.subcommand, Subcommand::NvcBuild);
-        assert_eq!(request.subcommand.mode(), ghdl::Mode::Build);
+        assert_eq!(request.subcommand.mode(), blueprint::Mode::Build);
     }
 
     #[test]
     fn nvc_drives_the_sim_face() {
         let request = run_of(parse(&argv(&["nvc", "--top", "tb"])).unwrap());
         assert_eq!(request.subcommand, Subcommand::NvcSim);
-        assert_eq!(request.subcommand.mode(), ghdl::Mode::Sim);
+        assert_eq!(request.subcommand.mode(), blueprint::Mode::Sim);
     }
 
     #[test]
@@ -455,14 +455,14 @@ mod tests {
         // shares the drive with `iverilog` but stops after the compile.
         let request = run_of(parse(&argv(&["iverilog-build", "--top", "tb"])).unwrap());
         assert_eq!(request.subcommand, Subcommand::IverilogBuild);
-        assert_eq!(request.subcommand.mode(), ghdl::Mode::Build);
+        assert_eq!(request.subcommand.mode(), blueprint::Mode::Build);
     }
 
     #[test]
     fn iverilog_drives_the_sim_face() {
         let request = run_of(parse(&argv(&["iverilog", "--top", "tb"])).unwrap());
         assert_eq!(request.subcommand, Subcommand::IverilogSim);
-        assert_eq!(request.subcommand.mode(), ghdl::Mode::Sim);
+        assert_eq!(request.subcommand.mode(), blueprint::Mode::Sim);
     }
 
     #[test]
@@ -472,14 +472,14 @@ mod tests {
         // builds.
         let request = run_of(parse(&argv(&["verilator-build", "--top", "tb"])).unwrap());
         assert_eq!(request.subcommand, Subcommand::VerilatorBuild);
-        assert_eq!(request.subcommand.mode(), ghdl::Mode::Build);
+        assert_eq!(request.subcommand.mode(), blueprint::Mode::Build);
     }
 
     #[test]
     fn verilator_drives_the_sim_face() {
         let request = run_of(parse(&argv(&["verilator", "--top", "tb"])).unwrap());
         assert_eq!(request.subcommand, Subcommand::VerilatorSim);
-        assert_eq!(request.subcommand.mode(), ghdl::Mode::Sim);
+        assert_eq!(request.subcommand.mode(), blueprint::Mode::Sim);
     }
 
     #[test]
