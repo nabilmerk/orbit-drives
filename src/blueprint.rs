@@ -184,6 +184,13 @@ pub(crate) fn plan_note(tool: &str, plan: Option<&str>) -> Option<String> {
 }
 
 /// The error for blueprint filesets the VHDL drives do not carry.
+///
+/// TWO drives share this error -- the ghdl drive and the nvc drive both
+/// ride [`vhdl_only`] -- so the message names the drive family, never
+/// one drive's name: an `orbit-drives nvc` user on a Verilog blueprint
+/// must not be told the refusal is ghdl's. The shape is the
+/// [`crate::iverilog::NotCarried`] precedent, where the same
+/// two-shares-one situation wrote the same drive-neutral plural.
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub struct NotCarried {
     /// Every non-VHDL entry, in blueprint order.
@@ -194,7 +201,7 @@ impl fmt::Display for NotCarried {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
         write!(
             f,
-            "the ghdl drive carries the VHDL fileset only; not yet carried:"
+            "the VHDL drives carry the VHDL fileset only; not yet carried:"
         )?;
         for entry in &self.entries {
             write!(
@@ -384,6 +391,29 @@ mod tests {
         assert_eq!(err.entries[1].fileset, "SYSV");
         let carried = parse_blueprint("VHDL\twork\t./a.vhd\n").unwrap();
         assert_eq!(vhdl_only(&carried).unwrap(), vec![PathBuf::from("./a.vhd")]);
+    }
+
+    #[test]
+    fn the_not_carried_refusal_names_the_family_never_one_drive() {
+        // Two drives share this error (ghdl and nvc), so the message
+        // names the fileset family, never one drive's name: an
+        // `orbit-drives nvc` user on a Verilog blueprint must not be
+        // told the refusal is ghdl's (proven live: the shared Display
+        // once hardcoded "the ghdl drive carries").
+        let err = vhdl_only(&parse_blueprint("VLOG\twork\t./b.v\n").unwrap()).unwrap_err();
+        let message = err.to_string();
+        assert!(
+            message.starts_with("the VHDL drives carry the VHDL fileset only"),
+            "the refusal should name the drive family: {message}"
+        );
+        assert!(
+            !message.contains("ghdl") && !message.contains("nvc"),
+            "the refusal should not name a single drive: {message}"
+        );
+        assert!(
+            message.contains("VLOG (blueprint line 1, ./b.v)"),
+            "the refusal should name the offending entry: {message}"
+        );
     }
 
     #[test]
