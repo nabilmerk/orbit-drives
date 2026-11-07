@@ -92,7 +92,8 @@ pub const XSIM_BIN: &str = "xsim";
 /// The work library every compile lands in (`-work work` on xvhdl and
 /// xvlog alike). It lives inside [`XSIM_DIR`] with the snapshots, and the
 /// blueprint's library column is carried, not mapped -- one `work`
-/// library, like every other drive in this crate.
+/// library, like every drive but the VHDL ones (ghdl and nvc consume the
+/// column).
 pub const WORK: &str = "work";
 
 /// The xsim state directory: the compiled `work` library AND the per-top

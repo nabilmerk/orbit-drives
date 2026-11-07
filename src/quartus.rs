@@ -76,7 +76,8 @@ pub const STD: &str = "-2008";
 
 /// The Questa work library every file compiles into (`-work work`). The
 /// blueprint's library column is carried, not mapped -- one `work`
-/// library, like every other drive in this crate.
+/// library, like every drive but the VHDL ones (ghdl and nvc consume the
+/// column).
 pub const WORK: &str = "work";
 
 /// The Questa library directory `vlib work` creates and the drive wipes

@@ -1,5 +1,5 @@
 //! The nvc target drive: the same shapes as the ghdl drive, nvc's probed
-//! faces -- and the one drive that consumes the blueprint's library
+//! faces -- and, like ghdl, a consumer of the blueprint's library
 //! column.
 //!
 //! The drive reads the blueprint orbit wrote for the target (the TSV plan:

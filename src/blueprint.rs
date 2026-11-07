@@ -23,10 +23,10 @@ pub struct Entry {
     pub fileset: String,
     /// The orbit library the file belongs to -- the owning project's HDL
     /// library name (orbit defaults it to the project's own name, not to
-    /// any tool's `work`). Consumed verbatim by the nvc drive's per-file
-    /// `--work` pin (the §25 multi-library face, probed live on nvc
-    /// 1.23.0); the other drives still analyze every file into their
-    /// tool's single default library.
+    /// any tool's `work`). Consumed verbatim by the VHDL drives' per-file
+    /// `--work` pin (the §25 multi-library face, probed live on ghdl
+    /// 6.0.0 and nvc 1.23.0); the other drives still analyze every file
+    /// into their tool's single default library.
     pub library: String,
     /// The file path, as the blueprint wrote it.
     pub path: PathBuf,
@@ -223,8 +223,8 @@ impl fmt::Display for NotCarried {
 impl std::error::Error for NotCarried {}
 
 /// The VHDL entries of the blueprint, in blueprint order, libraries
-/// attached: the shape the nvc drive's multi-library face consumes -- each
-/// file analyzed into the library its own row declares (`--work=
+/// attached: the shape the VHDL drives' multi-library faces consume --
+/// each file analyzed into the library its own row declares (`--work=
 /// <entry.library>`), so the deferral loop stays per-file and cross-library
 /// references defer across libraries exactly as they do within one.
 ///
@@ -414,7 +414,7 @@ mod tests {
 
     #[test]
     fn the_entry_filter_hands_the_drive_both_paths_and_libraries() {
-        // The nvc drive's multi-library face: the carried entries carry
+        // The VHDL drives' multi-library face: the carried entries carry
         // their blueprint library beside their path, in blueprint order.
         let entries = parse_blueprint("VHDL\tgrlib\t./pkg.vhd\nVHDL\twork\t./tb.vhd\n").unwrap();
         let carried = vhdl_entries(&entries).unwrap();

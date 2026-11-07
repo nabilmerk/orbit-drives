@@ -41,11 +41,13 @@ orbit test --target ghdl -- -gW=4 --vcd=waves.vcd
 
 Orbit spawns the target in the target's output directory with
 `ORBIT_BLUEPRINT` pointing at the plan file (the TSV plan: one
-`fileset<TAB>library<TAB>filepath` line per collected file) and
-`ORBIT_TB_NAME` set to the designated testbench. Orbit consumes its own
-`--` separator and appends the extras straight onto the target's argv, so
-the drive passes every argument it does not own through to each `ghdl -r`
-verbatim.
+`fileset<TAB>library<TAB>filepath` line per collected file),
+`ORBIT_TB_NAME` set to the designated testbench, and
+`ORBIT_PROJECT_LIBRARY` set to the working project's HDL library (the
+voice the VHDL drives' elaborate/run argv resolves first). Orbit consumes
+its own `--` separator and appends the extras straight onto the target's
+argv, so the drive passes every argument it does not own through to each
+`ghdl -r` verbatim.
 
 ## Usage
 
@@ -167,27 +169,83 @@ Exits:
 
 Two target entries (`ghdl`, `ghdl-build`) share one drive, split by how
 far it goes: the build face stops after step 4, the sim face runs on
-through the judge.
+through the judge. The drive consumes the blueprint's library column (the
+§25 multi-library face, probed live on ghdl 6.0.0, 2026-11-07) -- the
+same face the nvc drive carries, on ghdl's own resolution:
 
 1. Read the blueprint; every non-VHDL entry (`VLOG`, `SYSV`, a custom
    fileset) is a loud exit-2, never a silent skip.
-2. Wipe the stale work library (`work-obj08.cf`): ghdl's library file is
-   its clock, and a second run in orbit's persistent output directory
-   would otherwise obsolete its own design out from under `ghdl -e`.
-   Correctness before incrementality in v1 -- every drive starts from an
-   empty library.
-3. Analyze the VHDL files in blueprint order with the **deferral loop**:
-   ghdl is order-sensitive, so a failing analyze defers its file to a retry
-   after the others; a pass that makes no progress stops the loop with
-   every residual stderr surfaced verbatim.
-4. Elaborate each top (`ghdl -e --std=08 <top> <extras>` on the build
-   face; the extras ride the elab argv there because there is no run to
-   carry them). A nonzero elaboration is a finding, exit 1.
-5. (`ghdl` only) Run each top (`ghdl -r --std=08 <top>
-   --assert-level=error <extra args>`; the assert level is a simulation
-   option, legal only after the toplevel unit) and capture the log.
+2. Wipe the stale library state (every `<library>-obj08.cf` in the output
+   directory): ghdl's library file is its clock -- one file per analyzed
+   library now, named after the standard (`-obj08`) and LOWERCASED by
+   ghdl (`--work=MyLib` writes `mylib-obj08.cf`, probed). A second run in
+   orbit's persistent output directory would otherwise obsolete its own
+   design out from under `ghdl -e`; and a library a previous blueprint
+   analyzed but this one no longer names must die too, or a
+   `library <other>;` clause would silently resolve against its stale
+   units -- the scan, not the blueprint's library list, is what makes the
+   wipe honest. Correctness before incrementality in v1 -- every drive
+   starts from empty libraries.
+3. Analyze the VHDL files in blueprint order with the **deferral loop**,
+   each file into the library its own blueprint row declares
+   (`ghdl -a --std=08 --work=<entry.library> <file>`): ghdl is
+   order-sensitive, so a failing analyze defers its file to a retry after
+   the others; a pass that makes no progress stops the loop with every
+   residual stderr surfaced verbatim. Cross-library references defer
+   across libraries exactly as they defer within one: pass 1's
+   `cannot find resource library "<other>"` face is the absent
+   `<other>-obj08.cf` file, and the retry resolves once the provider's
+   row has written it.
+4. Elaborate each top (`ghdl -e --std=08 --work=<the top's library> <top>
+   <extras>` on the build face; the extras ride the elab argv there
+   because there is no run to carry them). A nonzero elaboration is a
+   finding, exit 1.
+5. (`ghdl` only) Run each top (`ghdl -r --std=08 --work=<the top's
+   library> <top> --assert-level=error <extra args>`; the assert level is
+   a simulation option, legal only after the toplevel unit) and capture
+   the log.
 6. (`ghdl` only) Gate the run: a probed failure face in the log OR a
    nonzero ghdl exit is a finding. Either witness convicts.
+
+The multi-library facts the probes wrote down:
+
+- **No search-path flag exists or is needed.** ghdl resolves a
+  consumer's `library <other>;` clause against the sibling
+  `<other>-obj08.cf` file in the SAME working directory, automatically --
+  `ghdl -a --std=08 --work=work gate.vhd` analyzing clean against
+  `grlib-obj08.cf` with no `-P`/`-L` anywhere (probed; move the sibling
+  into a subdirectory and the resolution dies: ghdl's library search is
+  the cwd alone). Orbit already spawns the drive with the output
+  directory as the cwd, where every row's file lands.
+- **The elaborate and run argv pin the top's library** (`--work=<lib>`),
+  because ghdl's bare-top commands search the WORK library only (`-e tb`
+  with the top analyzed into any other library: `error: cannot find
+  entity or configuration tb`, exit 1, probed). The resolution, loudest
+  voice first: `$ORBIT_PROJECT_LIBRARY` (orbit sets it on every spawned
+  target to the working project's library; the designated testbench is a
+  working-project file); then the blueprint's single carried library
+  (direct invocation without orbit); then ghdl's default `work` -- a
+  guess that cannot pass silently, because the wiped `work` library
+  cannot hold a stale unit: a wrong guess dies loudly on ghdl's own
+  elaboration refusal.
+- **A library no blueprint row populates fails loudly at analyze.** A
+  design naming a THIRD library (not one the planner carried) dies on
+  `cannot find resource library "<other>"` / `unit "<unit>" not found in
+  library "<other>"`, the deferral loop exhausts with no progress, and
+  the residual stderr relays the faces verbatim, exit 1 -- never a silent
+  blackbox degradation. Every library the blueprint carries is analyzed,
+  so this face cannot fire for one.
+- **The argv shape changed with the multi-library face** (2026-11-07):
+  every project's analyze/elab/run now carries `--work=<library>` -- a
+  depless single-library project's analyze went from
+  `ghdl -a --std=08 f.vhd` to `ghdl -a --std=08 --work=work f.vhd`, its
+  elaboration from `ghdl -e --std=08 top` to
+  `ghdl -e --std=08 --work=work top`, its run likewise. Nothing about the
+  judged faces moved with it; the probed sequences below carry the new
+  argv verbatim, and the single-library live tests drive the new shape
+  end to end.
+- **VHDL only**, like every VHDL drive: the `VLOG`/`SYSV` filesets are
+  the loud exit-2 refusal, and ghdl's Verilog face is not carried.
 
 ## The nvc drive
 
@@ -629,6 +687,11 @@ face.
 | `ghdl:error: unknown command '--std=08'` | `ghdl --std=08 -a f.vhd` | ghdl's argv is command-first: `ghdl -a --std=08 f.vhd` |
 | `error: architecture "rtl" of "top" is obsoleted by entity "gate"` | the drive's second run in one output directory, consumer-first blueprint | the stale work library clock: re-analysis obsoletes dependents, `ghdl -e` refuses the unchanged design -- the wipe exists for this |
 | `simulation stopped @0ms` | `ghdl -r --std=08 tb_stop` on a testbench calling `std.env.stop` | a legitimate stop exits 0 -- clean, not a crash-door finding |
+| `cannot find resource library "grlib"` (+ `unit "grlib_pkg" not found in library "grlib"`, `entity "tb" was not analysed`, `ghdl:error: compilation error`) | `ghdl -a --std=08 --work=work tb.vhd` with no `grlib-obj08.cf` in the cwd | the absent-sibling-library face, exit 1 -- four markers on ONE failed spawn; the retry resolves once the provider's row writes `grlib-obj08.cf` (the cross-library deferral face: the drive's multi-library blueprint runs `3 file(s) analyzed in 3 pass(es)`, probed through the drive) |
+| exit 0 end to end, `(report note): SIM PASSED` relayed, two libraries | per-file `ghdl -a --std=08 --work=work tb.vhd` / `--work=work gate.vhd` / `--work=grlib pkg.vhd` (consumers FIRST); then `ghdl -e --std=08 --work=work tb`; then `ghdl -r --std=08 --work=work tb` (same through the drive) | **the multi-library face**: one `<library>-obj08.cf` per `--work` library in the cwd; the consumers' `library grlib;` resolves against the sibling `grlib-obj08.cf` AUTOMATICALLY -- no `-P`/`-L` flag exists or is needed; elab/run pin the top's library and resolve the other library through the sibling file |
+| `error: cannot find entity or configuration tb` (+ `ghdl:error: compilation error`) | `ghdl -e --std=08 tb` with tb analyzed into `--work=counter` -- bare, and pinned to the wrong library (`--work=work`) alike | **the bare-top WORK-only search**, exit 1: even with the library's sibling file in the cwd, a bare (or wrongly pinned) top is searched in the named library alone -- why the drive pins `--work=<the top's library>` on every elaborate and run |
+| exit 0, `(report note): SIM PASSED` | `ghdl -e --std=08 --work=counter tb; ghdl -r --std=08 --work=counter tb` (tb analyzed into `--work=counter`) | the pinned-library elab/run: the top resolves in its OWN library, what it references through the sibling file |
+| `--work=MyLib` writes `mylib-obj08.cf` | `ghdl -a --std=08 --work=MyLib pkg.vhd` | ghdl LOWERCASES the library name in the state file's name, and `library MyLib;` clauses still resolve against it -- why the drive's wipe keys on the `-obj08.cf` suffix alone |
 
 Case-exactness is part of the contract: ghdl spells its failures in
 lowercase, so `:ERROR:`, `(ASSERTION FAILURE)`, `(ASSERTION ERROR)`, and
@@ -825,19 +888,23 @@ vocabulary, never this one.
   - **the build face's state** (quartus_map's compilation database): a
     stale database could make a re-drive incremental; the first probed
     re-drive decides whether the wipe list grows.
-- **The library column is load-bearing on nvc, carried on the rest.**
-  The nvc drive consumes the blueprint's library column verbatim --
-  every file analyzed into `--work=<entry.library>` (the §25
+- **The library column is load-bearing on the VHDL drives, carried on
+  the rest.** The nvc drive consumes the blueprint's library column
+  verbatim -- every file analyzed into `--work=<entry.library>` (the §25
   multi-library face, probed live on nvc 1.23.0, 2026-11-07), every
   spawn carrying `-L .`, the wipe taking every `_NVC_LIB`-marked
   directory, and the elaborate/run argv pinning the top's library
   (resolved from `$ORBIT_PROJECT_LIBRARY`, then the blueprint's single
-  carried library, then nvc's default `work`). Every OTHER drive still
-  maps nothing: ghdl analyzes into its one `work-obj08.cf` clock,
-  iverilog compiles into its one snapshot, verilator lints and builds
-  one fileset, and the vivado and quartus faces compile their filesets
-  as given -- a multi-library orbit project on those drives stays out
-  of scope for v1.
+  carried library, then nvc's default `work`). The ghdl drive consumes
+  the same column on its own resolution (probed live on ghdl 6.0.0, the
+  same day): per-file `--work=`, the cwd-sibling `-obj08.cf` files doing
+  the resolution no search flag needed, the wipe taking every
+  `<library>-obj08.cf`, and the same three-voice ladder on the
+  elaborate/run argv. Every OTHER drive still maps nothing: iverilog
+  compiles into its one snapshot, verilator lints and builds one
+  fileset, and the vivado and quartus faces compile their filesets as
+  given -- a multi-library orbit project on those drives stays out of
+  scope for v1.
 - **The standards are pinned where the tools pin them** (`--std=08` for
   ghdl, `--std=2008` for nvc, `-g2012` for iverilog, `-2008` for the
   quartus sim face's vcom -- vcom's spelling of the same VHDL-2008 pin;
@@ -851,16 +918,21 @@ vocabulary, never this one.
   argv on the build faces).
 - **The state is run-scoped, not incremental.** Every drive wipes its
   clock first (nvc's: every `_NVC_LIB`-marked directory in the output
-  directory -- the whole per-library set, not a named one; ghdl's
-  `work-obj08.cf`; iverilog's snapshot; verilator's
+  directory -- the whole per-library set, not a named one; ghdl's: every
+  `<library>-obj08.cf` file in the output directory -- the same
+  whole-per-library set, the name lowercased by ghdl; iverilog's
+  snapshot; verilator's
   `obj_dir`; yosys's `netlists/`; vivado's `xsim.dir/` and, on the build
   face, its `netlists/`; the quartus sim face's `work/` +
   `modelsim.ini`, DOCUMENTED-ONLY; cocotb's `sim_build/`). A large
   design pays a full re-analysis per drive; correctness before
   incrementality is the v1 stance. (Probed honestly: ghdl's wipe is
-  load-bearing -- a stale library obsoletes its own design -- and nvc's
-  is load-bearing on a multi-library blueprint, where a library the
-  blueprint no longer analyzes must not stay resolvable, even though
+  load-bearing -- a stale library obsoletes its own design -- and with
+  libraries in the blueprint it is load-bearing against the drive's own
+  resolution too, where a library the blueprint no longer analyzes must
+  not stay resolvable; nvc's
+  is load-bearing on a multi-library blueprint for the same reason, even
+  though
   nvc itself tolerates re-analysis in a stale library; iverilog's
   snapshot cannot be run past a
   failed compile, verilator's `--build` regenerates its intermediates, a

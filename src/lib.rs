@@ -17,10 +17,12 @@
 //! - [`proc`]: the shared process plumbing -- spawn-and-capture, the log
 //!   join, the verbatim block relays.
 //! - [`contracts`]: the per-tool vocabularies and the judge.
-//! - [`ghdl`]: the ghdl target drives -- blueprint in, judged verdict out.
-//! - [`nvc`]: the nvc target drives -- the same shapes, nvc's probed faces,
-//!   the one drive that consumes the blueprint's library column (the §25
-//!   multi-library face).
+//! - [`ghdl`]: the ghdl target drives -- blueprint in, judged verdict
+//!   out, the blueprint's library column consumed (the §25 multi-library
+//!   face, on ghdl's own cwd-sibling resolution).
+//! - [`nvc`]: the nvc target drives -- the same shapes, nvc's probed
+//!   faces, the same library-column consumption (the §25 multi-library
+//!   face, on nvc's `-L .` search path).
 //! - [`iverilog`]: the iverilog target drives -- one order-free compile,
 //!   one judged `vvp` run.
 //! - [`verilator`]: the verilator target drives -- one lint, per-top

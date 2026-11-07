@@ -6,13 +6,22 @@
 //! judge). The drive reads the blueprint orbit wrote for the target (the
 //! TSV plan: one `fileset<TAB>library<TAB>filepath` line per collected
 //! file), analyzes the VHDL entries in blueprint order with the deferral
-//! loop, and elaborates every requested top; the sim face then runs each
-//! top and judges the run log against ghdl's probed failure vocabulary.
-//! The judge -- not ghdl's exit code -- is the sim face's gate: ghdl's
-//! exit is honest for a `severity failure` stop but lies for a violated
-//! `severity error` check (exit 0), and the face in the log is the only
-//! witness. The build face needs no judge: `ghdl -a` and `ghdl -e` exit
-//! nonzero on a broken design (probed live), so the exit is honest there.
+//! loop -- each file into the library its own row declares
+//! (`--work=<entry.library>`, the §25 multi-library face, probed live on
+//! ghdl 6.0.0) -- and elaborates every requested top; the sim face then
+//! runs each top and judges the run log against ghdl's probed failure
+//! vocabulary. ghdl carries no search-path flag and needs none: a
+//! consumer's `library <other>;` clause resolves against the sibling
+//! `<other>-obj08.cf` file in the same working directory, automatically
+//! -- ghdl's library search is the cwd alone (probed: move the sibling
+//! into a subdirectory and the resolution dies). The elaborate and run
+//! argv pin the top's library, because ghdl's bare-top commands search
+//! the work library only. The judge -- not ghdl's exit code -- is the
+//! sim face's gate: ghdl's exit is honest for a `severity failure` stop
+//! but lies for a violated `severity error` check (exit 0), and the face
+//! in the log is the only witness. The build face needs no judge:
+//! `ghdl -a` and `ghdl -e` exit nonzero on a broken design (probed
+//! live), so the exit is honest there.
 //!
 //! The blueprint parse, the request view, and the fileset filter are the
 //! shared machinery of [`crate::blueprint`]; what lives here is ghdl's
@@ -25,7 +34,7 @@ use std::path::{Path, PathBuf};
 use std::process::Command;
 
 use crate::blueprint::{
-    parse_blueprint, plan_note, vhdl_only, BlueprintError, Drive, Mode, NotCarried,
+    parse_blueprint, plan_note, vhdl_entries, BlueprintError, Drive, Entry, Mode, NotCarried,
 };
 use crate::contracts::{self, Tool};
 use crate::proc::{capture, eprint_block, join_log, lossy, print_block};
@@ -47,19 +56,47 @@ pub const STD: &str = "--std=08";
 /// land in the log either way.
 pub const ASSERT_LEVEL: &str = "--assert-level=error";
 
-/// The work library file ghdl writes into the working directory for
-/// `--std=08` (ghdl names it after the standard: `-obj08`). It is ghdl's
-/// clock.
+/// The suffix of the library state file ghdl writes into the working
+/// directory: `<library>-obj08.cf` (ghdl names the file after the
+/// standard -- `-obj08` under the drive's pinned `--std=08`), one file
+/// per analyzed library, `work-obj08.cf` beside `grlib-obj08.cf` on a
+/// multi-library blueprint. It is ghdl's clock, one clock per library.
+///
+/// Probed live on ghdl 6.0.0 (2026-11-07): the library name lands
+/// LOWERCASED in the file name -- `--work=MyLib` writes `mylib-obj08.cf`
+/// -- while the blueprint's `library MyLib;` clauses still resolve
+/// against it, so the drive's wipe keys on the suffix alone and never
+/// needs the name's case.
 ///
 /// Orbit's output directory persists across runs, and a stale library
-/// turns this drive's own re-analysis against itself: in the
+/// file turns this drive's own re-analysis against itself: in the
 /// consumer-first order the deferral loop exists for, run 2 re-analyzes
 /// the consumer BEFORE its provider -- the provider's re-analysis then
 /// obsoletes the consumer's units, and `ghdl -e` refuses the unchanged
 /// design (`error: architecture "rtl" of "top" is obsoleted by entity
 /// "gate"`, probed live on ghdl 6.0.0, 2026-11-07). Correctness before
-/// incrementality in v1: every drive starts from an empty library.
-pub const WORK_LIBRARY_FILE: &str = "work-obj08.cf";
+/// incrementality in v1: every drive starts from empty libraries -- and
+/// the wipe covers EVERY `<library>-obj08.cf` in the working directory,
+/// not just work's, because a library a PREVIOUS blueprint analyzed but
+/// this one no longer names must die too, or a `library <other>;` clause
+/// would silently resolve against its stale units (the same stance as
+/// the nvc drive's marker scan). Files of other standards
+/// (`<library>-obj05.cf`) are not this drive's state: it pins `--std=08`
+/// on every spawn, and ghdl consults only the matching file.
+pub const LIBRARY_FILE_SUFFIX: &str = "-obj08.cf";
+
+/// ghdl's default work library name (`work`), and the drive's last resort
+/// when it must name the library that holds the top: see [`top_library`].
+pub const DEFAULT_LIBRARY: &str = "work";
+
+/// The env var orbit sets on every spawned target
+/// (`ORBIT_PROJECT_LIBRARY`): the working project's HDL library name --
+/// the same name orbit's planner writes into the blueprint's library
+/// column for the project's own files, which is where the designated
+/// testbench lives. The planner's voice, not the drive's guess: orbit
+/// defaults a project's library to the project's NAME, so under orbit
+/// this is generally NOT ghdl's `work`.
+pub const PROJECT_LIBRARY_ENV: &str = "ORBIT_PROJECT_LIBRARY";
 
 /// A file that never analyzed, with the stderr of its last attempt.
 #[derive(Clone, Debug, PartialEq, Eq)]
@@ -177,7 +214,8 @@ pub enum DriveError {
     NotCarried(NotCarried),
     /// ghdl could not be spawned at all: usage-class, exit 2.
     Spawn(String),
-    /// The stale work library could not be wiped: usage-class, exit 2.
+    /// The stale library state files could not be wiped: usage-class,
+    /// exit 2.
     Library(String),
     /// Files never analyzed after the deferral loop exhausted: findings,
     /// exit 1.
@@ -224,16 +262,14 @@ pub fn drive(request: &Drive, mode: Mode) -> Result<(), DriveError> {
     // a loud usage error instead of a deferral-loop residual.
     capture(GHDL_BIN, Command::new(GHDL_BIN).arg("--version")).map_err(DriveError::Spawn)?;
 
-    // Run-scoped library state: see `WORK_LIBRARY_FILE`. Every drive
-    // starts from an empty library, so a second run in the same
-    // persistent output directory cannot obsolete its own design.
-    if let Err(e) = fs::remove_file(WORK_LIBRARY_FILE) {
-        if e.kind() != std::io::ErrorKind::NotFound {
-            let message = format!("cannot wipe the stale work library {WORK_LIBRARY_FILE}: {e}");
-            eprintln!("orbit-drives: ghdl: error: {message}");
-            return Err(DriveError::Library(message));
-        }
-    }
+    // Run-scoped library state: see `LIBRARY_FILE_SUFFIX`. Every drive
+    // starts from empty libraries, so a second run in the same persistent
+    // output directory cannot obsolete its own design, and no consumer
+    // resolves a library this blueprint no longer analyzes.
+    wipe_libraries(Path::new(".")).map_err(|message| {
+        eprintln!("orbit-drives: ghdl: error: {message}");
+        DriveError::Library(message)
+    })?;
 
     if let Some(note) = plan_note(
         "ghdl",
@@ -255,16 +291,29 @@ pub fn drive(request: &Drive, mode: Mode) -> Result<(), DriveError> {
         eprintln!("orbit-drives: ghdl: error: {e}");
         DriveError::Blueprint(e)
     })?;
-    let files = vhdl_only(&entries).map_err(|e| {
+    let carried = vhdl_entries(&entries).map_err(|e| {
         eprintln!("orbit-drives: ghdl: error: {e}");
         DriveError::NotCarried(e)
     })?;
 
     println!(
         "orbit-drives: ghdl: {label}: analyzing {} VHDL file(s) in blueprint order",
-        files.len()
+        carried.len()
     );
-    let report = analyze_with_deferral(&files, analyze_once);
+    let paths: Vec<PathBuf> = carried.iter().map(|entry| entry.path.clone()).collect();
+    let report = analyze_with_deferral(&paths, |file| {
+        // Each file analyzes into the library its own blueprint row
+        // declares -- the §25 face, the column consumed verbatim. The
+        // deferral loop hands back exactly the paths it was given, and
+        // those came from these entries: the lookup cannot miss.
+        let library = carried
+            .iter()
+            .find(|entry| entry.path == file)
+            .expect("the deferral loop hands back the blueprint's own paths")
+            .library
+            .clone();
+        analyze_once(file, &library)
+    });
     println!(
         "orbit-drives: ghdl: {label}: {} file(s) analyzed in {} pass(es)",
         report.analyzed.len(),
@@ -286,11 +335,18 @@ pub fn drive(request: &Drive, mode: Mode) -> Result<(), DriveError> {
         return Err(DriveError::Analyze(report));
     }
 
+    // The library that holds the tops: see `top_library`. Resolved once
+    // -- it does not vary per top.
+    let top_library = top_library(std::env::var(PROJECT_LIBRARY_ENV).ok().as_deref(), &carried);
+
     let mut findings = Vec::new();
     for top in &request.tops {
         println!("orbit-drives: ghdl: {label}: elaborating {top}");
         let mut elaborate = Command::new(GHDL_BIN);
-        elaborate.args(["-e", STD]).arg(top);
+        // The top's library rides every command (`--work=<library>`):
+        // ghdl's bare-top commands search the work library only, so the
+        // pin is load-bearing -- see `top_library`.
+        elaborate.args(command_args("-e", &top_library)).arg(top);
         // The extras ride the drive's last step verbatim: the run argv on
         // the sim face, the elaboration argv on the build face (there is
         // no run to carry them, and silently dropping a user argument
@@ -314,7 +370,7 @@ pub fn drive(request: &Drive, mode: Mode) -> Result<(), DriveError> {
         match mode {
             Mode::Build => println!("orbit-drives: ghdl: {label}: {top}: elaborated"),
             Mode::Sim => {
-                let outcome = run_top(top, &request.extra, label)?;
+                let outcome = run_top(top, &top_library, &request.extra, label)?;
                 if outcome.clean() {
                     println!("orbit-drives: ghdl: {label}: {top}: pass");
                 } else if outcome.has_face() {
@@ -344,14 +400,22 @@ pub fn drive(request: &Drive, mode: Mode) -> Result<(), DriveError> {
     }
 }
 
-/// Run one elaborated top and capture its log: `ghdl -r --std=08 <top>
-/// --assert-level=error <extras>`.
-fn run_top(top: &str, extra: &[String], label: &str) -> Result<RunOutcome, DriveError> {
+/// Run one elaborated top and capture its log: `ghdl -r --std=08
+/// --work=<the top's library> <top> --assert-level=error <extras>`.
+fn run_top(
+    top: &str,
+    library: &str,
+    extra: &[String],
+    label: &str,
+) -> Result<RunOutcome, DriveError> {
     println!("orbit-drives: ghdl: {label}: running {top}");
     // `--assert-level=error` rides AFTER the top unit: it is a
     // simulation option, and ghdl rejects it anywhere earlier.
     let mut run = Command::new(GHDL_BIN);
-    run.args(["-r", STD]).arg(top).arg(ASSERT_LEVEL).args(extra);
+    run.args(command_args("-r", library))
+        .arg(top)
+        .arg(ASSERT_LEVEL)
+        .args(extra);
     let output = capture(GHDL_BIN, &mut run).map_err(DriveError::Spawn)?;
     let log = join_log(lossy(&output.stdout), lossy(&output.stderr));
     print_block(&log);
@@ -363,15 +427,117 @@ fn run_top(top: &str, extra: &[String], label: &str) -> Result<RunOutcome, Drive
 }
 
 /// One `ghdl -a` attempt: `Ok` when ghdl accepted the file, `Err` with the
-/// stderr when it did not.
-fn analyze_once(file: &Path) -> Result<(), String> {
+/// stderr when it did not. The command flag leads ghdl's command-first
+/// argv (`-a`, then the global pins), and the work library is what makes
+/// the attempt multi-library: the file lands in the library file of the
+/// library its blueprint row declares.
+fn analyze_once(file: &Path, library: &str) -> Result<(), String> {
     let mut command = Command::new(GHDL_BIN);
-    command.args(["-a", STD]).arg(file);
+    command.args(command_args("-a", library)).arg(file);
     match capture(GHDL_BIN, &mut command) {
         Ok(output) if output.status.success() => Ok(()),
         Ok(output) => Err(lossy(&output.stderr)),
         Err(message) => Err(message),
     }
+}
+
+/// The leading block every ghdl argv carries: the command flag first
+/// (`-a` / `-e` / `-r` -- ghdl's argv is command-first, `ghdl --std=08
+/// -a f.vhd` answers `ghdl:error: unknown command '--std=08'`), then the
+/// global pins: the std and the work library.
+///
+/// The `--work` value is consumed verbatim from the blueprint's library
+/// column on the analyze face (the §25 ruling: the library name is the
+/// project's declared name, orbit's planner is its source of truth); on
+/// the elaborate and run faces it is the top's library, resolved by
+/// [`top_library`].
+fn command_args(command: &str, library: &str) -> Vec<String> {
+    vec![
+        command.to_string(),
+        STD.to_string(),
+        format!("--work={library}"),
+    ]
+}
+
+/// The library that holds the tops -- the `--work` pin on the elaborate
+/// and run argv.
+///
+/// ghdl's bare-top commands search the WORK library ONLY: `-e tb` with
+/// the top analyzed into any other library answers `error: cannot find
+/// entity or configuration tb` (exit 1, probed live on ghdl 6.0.0,
+/// 2026-11-07, even with that library's sibling file in the cwd), so the
+/// drive must name the top's library on every elaboration and run.
+///
+/// The resolution, loudest voice first:
+///
+/// 1. `$ORBIT_PROJECT_LIBRARY` -- orbit's own voice. The planner sets it
+///    on every spawned target to the working project's HDL library, and
+///    the designated testbench is a working-project file, so under orbit
+///    this is always the right answer (and generally NOT `work`: orbit
+///    defaults a project's library to the project's name). An empty
+///    value counts as absent -- the `$ORBIT_TB_NAME` stance.
+/// 2. The blueprint's single carried library -- direct invocation
+///    without orbit: when every VHDL row declares the same library, the
+///    top is necessarily in it.
+/// 3. ghdl's default [`DEFAULT_LIBRARY`] -- the leftover case (several
+///    libraries, no env): a guess, but a SAFE one. The drive wipes every
+///    library file first, so `work` cannot hold a stale unit; a wrong
+///    guess dies loudly on ghdl's own elaboration refusal (`error:
+///    cannot find entity or configuration <top>`) -- never a silent
+///    degradation.
+fn top_library(project_library: Option<&str>, entries: &[Entry]) -> String {
+    match project_library {
+        Some(library) if !library.is_empty() => library.to_string(),
+        _ => {
+            let mut distinct: Vec<&str> =
+                entries.iter().map(|entry| entry.library.as_str()).collect();
+            distinct.sort_unstable();
+            distinct.dedup();
+            match distinct.as_slice() {
+                [only] => (*only).to_string(),
+                _ => DEFAULT_LIBRARY.to_string(),
+            }
+        }
+    }
+}
+
+/// Remove every ghdl library state file under `dir` -- the drive's output
+/// directory, passed as the cwd (`.`). A file is ghdl's when its name
+/// ends with [`LIBRARY_FILE_SUFFIX`]: one `<library>-obj08.cf` per
+/// analyzed library, the name lowercased by ghdl (probed), so the suffix
+/// alone is the honest key. The scan -- not the blueprint's library list
+/// -- is what makes the wipe honest: a library a PREVIOUS drive analyzed
+/// but this blueprint no longer names must die too, or a
+/// `library <other>;` clause would silently resolve against its stale
+/// units. A directory named like a library file is not ghdl's state
+/// (ghdl's state is files), and neither is a file of another standard
+/// (`<library>-obj05.cf`): the drive pins `--std=08`, and ghdl consults
+/// only the matching file.
+fn wipe_libraries(dir: &Path) -> Result<(), String> {
+    let unreadable = |e: std::io::Error| {
+        format!(
+            "cannot wipe the stale work libraries: cannot read {}: {e}",
+            dir.display()
+        )
+    };
+    let mut victims = Vec::new();
+    for entry in fs::read_dir(dir).map_err(unreadable)? {
+        let path = entry.map_err(unreadable)?.path();
+        if let Some(name) = path.file_name().and_then(|name| name.to_str()) {
+            if path.is_file() && name.ends_with(LIBRARY_FILE_SUFFIX) {
+                victims.push(path);
+            }
+        }
+    }
+    for path in victims {
+        if let Err(e) = fs::remove_file(&path) {
+            return Err(format!(
+                "cannot wipe the stale library file {}: {e}",
+                path.display()
+            ));
+        }
+    }
+    Ok(())
 }
 
 #[cfg(test)]
@@ -559,6 +725,10 @@ tb_err.vhd:9:5:@0ms:(report note): simulation continued
             2
         );
         assert_eq!(
+            DriveError::Library("cannot wipe".to_string()).exit_code(),
+            2
+        );
+        assert_eq!(
             DriveError::Analyze(AnalyzeReport {
                 analyzed: Vec::new(),
                 residual: Vec::new(),
@@ -576,5 +746,116 @@ tb_err.vhd:9:5:@0ms:(report note): simulation continued
             1
         );
         assert_eq!(DriveError::Findings(Vec::new()).exit_code(), 1);
+    }
+
+    #[test]
+    fn every_argv_leads_with_the_command_then_the_global_pins() {
+        // The probed command-first shape: the command flag leads, the
+        // global pins follow (`ghdl --std=08 -a f.vhd` answers
+        // `ghdl:error: unknown command '--std=08'`), and the work library
+        // rides every face -- analyze, elaborate, run alike.
+        assert_eq!(
+            command_args("-a", "grlib"),
+            vec![
+                "-a".to_string(),
+                "--std=08".to_string(),
+                "--work=grlib".to_string(),
+            ]
+        );
+        assert_eq!(
+            command_args("-e", "work"),
+            vec![
+                "-e".to_string(),
+                "--std=08".to_string(),
+                "--work=work".to_string(),
+            ]
+        );
+        // The library name rides verbatim -- orbit's planner owns it (the
+        // §25 ruling); the drive never normalizes it to ghdl's default.
+        assert_eq!(command_args("-r", "MyLib")[2], "--work=MyLib");
+        assert_eq!(command_args("-r", "work")[2], "--work=work");
+    }
+
+    #[test]
+    fn the_top_library_reads_orbits_voice_first() {
+        let entries = parse_blueprint("VHDL\tgrlib\t./pkg.vhd\nVHDL\twork\t./tb.vhd\n").unwrap();
+        // orbit's env is the loudest voice: it wins even where the
+        // blueprint could answer on its own.
+        assert_eq!(top_library(Some("mylib"), &entries), "mylib");
+        assert_eq!(top_library(Some("work"), &entries), "work");
+        // An empty value counts as absent -- the `$ORBIT_TB_NAME` stance
+        // -- so the ladder falls through to the next voice.
+        assert_eq!(top_library(Some(""), &entries), "work");
+    }
+
+    #[test]
+    fn the_top_library_falls_through_the_ladder() {
+        // No env, one carried library: the top is necessarily in it.
+        let one = parse_blueprint("VHDL\tmylib\t./a.vhd\nVHDL\tmylib\t./b.vhd\n").unwrap();
+        assert_eq!(top_library(None, &one), "mylib");
+        // No env, several libraries: ghdl's default `work` -- a guess
+        // that cannot pass silently, because the wiped `work` library
+        // cannot hold a stale unit: a wrong guess dies on ghdl's own
+        // elaboration refusal (`error: cannot find entity or
+        // configuration tb`, probed).
+        let many = parse_blueprint("VHDL\tgrlib\t./p.vhd\nVHDL\twork\t./tb.vhd\n").unwrap();
+        assert_eq!(top_library(None, &many), "work");
+        // An empty blueprint has no library to name: the default.
+        assert_eq!(top_library(None, &[]), "work");
+    }
+
+    #[test]
+    fn the_wipe_takes_every_library_file_and_nothing_else() {
+        let dir = temp_dir("wipe-libraries");
+        let work = dir.join("work-obj08.cf");
+        let grlib = dir.join("grlib-obj08.cf");
+        let lowercased = dir.join("mylib-obj08.cf");
+        let foreign_std = dir.join("work-obj05.cf");
+        let keep = dir.join("keep.txt");
+        for file in [&work, &grlib, &lowercased, &foreign_std, &keep] {
+            fs::write(file, "state").unwrap();
+        }
+        // A directory named like a library file is not ghdl's state:
+        // ghdl's state is files.
+        let imposter = dir.join("weird-obj08.cf");
+        fs::create_dir_all(&imposter).unwrap();
+
+        wipe_libraries(&dir).unwrap();
+
+        assert!(!work.exists(), "the work library file must die");
+        assert!(!grlib.exists(), "every library file must die");
+        assert!(
+            !lowercased.exists(),
+            "the lowercased name ghdl writes must die (probed: --work=MyLib writes \
+             mylib-obj08.cf)"
+        );
+        assert!(
+            foreign_std.exists(),
+            "a foreign standard's file is not this drive's state"
+        );
+        assert!(
+            keep.exists(),
+            "a file without the suffix is not ghdl's state"
+        );
+        assert!(
+            imposter.exists(),
+            "a directory named like a library file is not ghdl's state"
+        );
+        fs::remove_dir_all(&dir).ok();
+    }
+
+    #[test]
+    fn the_wipe_surfaces_an_unreadable_directory_as_usage_class() {
+        let missing = temp_dir("wipe-libraries-missing");
+        fs::remove_dir_all(&missing).unwrap();
+        let err = wipe_libraries(&missing).unwrap_err();
+        assert!(
+            err.starts_with("cannot wipe the stale work libraries"),
+            "the wipe failure should name itself: {err}"
+        );
+        assert!(
+            err.contains(&missing.display().to_string()),
+            "the wipe failure should name the directory: {err}"
+        );
     }
 }
