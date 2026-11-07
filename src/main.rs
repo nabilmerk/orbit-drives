@@ -20,7 +20,7 @@ use std::env;
 use std::path::PathBuf;
 use std::process::ExitCode;
 
-use orbit_contracts::{ghdl, iverilog, nvc};
+use orbit_contracts::{ghdl, iverilog, nvc, verilator};
 
 const USAGE: &str = "\
 orbit-contracts: the probed failure vocabularies and the honest-exit targets for orbit
@@ -50,6 +50,20 @@ SUBCOMMANDS:
                  exit honest; no simulation and nothing judged -- the
                  compile exits are honest, and iverilog validates every
                  -s root name at compile time (the iverilog build face)
+    verilator    lint the blueprint's Verilog once, build one simulation
+                 model per top (--binary --build --timing into obj_dir),
+                 run each model, and gate every run log on verilator's
+                 probed failure vocabulary AND the model's exit (the
+                 verilator sim face; every probed model failure dies by
+                 SIGABRT, so the exit convicts and the judge is the
+                 second witness)
+    verilator-build
+                 the lint and the per-top model builds only, exit
+                 honest; no simulation and nothing judged -- the lint
+                 exits are honest (exit 1 on a lint error, an unknown
+                 --top-module, or an enabled warning, probed live), and
+                 verilator validates every --top-module name at lint
+                 time (the verilator build face)
 
 SHARED OPTIONS:
     --blueprint <path>  the TSV blueprint (default: $ORBIT_BLUEPRINT)
@@ -64,12 +78,12 @@ TOPS:
 
 EXTRAS:
     every other argument rides the drive's LAST tool argv verbatim: the
-    `ghdl -r` / `nvc -r` / `vvp` argv on the sim faces, the `ghdl -e` /
-    `nvc -e` / `iverilog` compile argv on the build faces (there is no
-    run to carry them, and a dropped argument would be a silent
-    degradation). Orbit strips its own `--` separator and appends the
-    extras straight onto this argv, so `orbit test --target ghdl --
-    -gW=4 --vcd=w.vcd` passes both through to ghdl
+    `ghdl -r` / `nvc -r` / `vvp` / model argv on the sim faces, the
+    `ghdl -e` / `nvc -e` / `iverilog` compile / verilator build argv on
+    the build faces (there is no run to carry them, and a dropped
+    argument would be a silent degradation). Orbit strips its own `--`
+    separator and appends the extras straight onto this argv, so `orbit
+    test --target ghdl -- -gW=4 --vcd=w.vcd` passes both through to ghdl
 
 EXITS:
     0    clean (every run judged clean, or every top elaborated clean)
@@ -101,6 +115,13 @@ enum Subcommand {
     /// `iverilog`: iverilog's sim face -- the one compile, then the
     /// judged `vvp` run.
     IverilogSim,
+    /// `verilator-build`: verilator's build face -- the lint and the
+    /// per-top model builds, exit honest, no simulation, nothing
+    /// judged.
+    VerilatorBuild,
+    /// `verilator`: verilator's sim face -- lint, per-top builds, then
+    /// the judged model runs.
+    VerilatorSim,
 }
 
 impl Subcommand {
@@ -108,10 +129,14 @@ impl Subcommand {
     /// drive goes.
     fn mode(self) -> ghdl::Mode {
         match self {
-            Subcommand::GhdlBuild | Subcommand::NvcBuild | Subcommand::IverilogBuild => {
-                ghdl::Mode::Build
-            }
-            Subcommand::GhdlSim | Subcommand::NvcSim | Subcommand::IverilogSim => ghdl::Mode::Sim,
+            Subcommand::GhdlBuild
+            | Subcommand::NvcBuild
+            | Subcommand::IverilogBuild
+            | Subcommand::VerilatorBuild => ghdl::Mode::Build,
+            Subcommand::GhdlSim
+            | Subcommand::NvcSim
+            | Subcommand::IverilogSim
+            | Subcommand::VerilatorSim => ghdl::Mode::Sim,
         }
     }
 }
@@ -121,7 +146,7 @@ impl Subcommand {
 fn unknown_subcommand(name: &str) -> String {
     format!(
         "no target named {name:?}: carried subcommands: ghdl, ghdl-build, nvc, nvc-build, \
-         iverilog, iverilog-build"
+         iverilog, iverilog-build, verilator, verilator-build"
     )
 }
 
@@ -166,6 +191,8 @@ fn parse(argv: &[String]) -> Result<Cli, CliError> {
         "nvc" => Subcommand::NvcSim,
         "iverilog-build" => Subcommand::IverilogBuild,
         "iverilog" => Subcommand::IverilogSim,
+        "verilator-build" => Subcommand::VerilatorBuild,
+        "verilator" => Subcommand::VerilatorSim,
         other => return Err(CliError(unknown_subcommand(other))),
     };
 
@@ -296,6 +323,15 @@ fn drive_request(request: Request) -> ExitCode {
             request.subcommand.mode(),
         )
         .map_err(|e| e.exit_code()),
+        Subcommand::VerilatorBuild | Subcommand::VerilatorSim => verilator::drive(
+            &ghdl::Drive {
+                blueprint,
+                tops,
+                extra: request.extra,
+            },
+            request.subcommand.mode(),
+        )
+        .map_err(|e| e.exit_code()),
     };
     match outcome {
         Ok(()) => ExitCode::SUCCESS,
@@ -405,7 +441,8 @@ mod tests {
         assert!(
             err.0.contains("ghdl-build")
                 && err.0.contains("nvc-build")
-                && err.0.contains("iverilog-build"),
+                && err.0.contains("iverilog-build")
+                && err.0.contains("verilator-build"),
             "the error should list the carried subcommands: {}",
             err.0
         );
@@ -424,6 +461,23 @@ mod tests {
     fn iverilog_drives_the_sim_face() {
         let request = run_of(parse(&argv(&["iverilog", "--top", "tb"])).unwrap());
         assert_eq!(request.subcommand, Subcommand::IverilogSim);
+        assert_eq!(request.subcommand.mode(), ghdl::Mode::Sim);
+    }
+
+    #[test]
+    fn verilator_build_is_its_own_subcommand_driving_the_build_face() {
+        // The split: `verilator-build` is a separate target entry that
+        // shares the drive with `verilator` but stops after the model
+        // builds.
+        let request = run_of(parse(&argv(&["verilator-build", "--top", "tb"])).unwrap());
+        assert_eq!(request.subcommand, Subcommand::VerilatorBuild);
+        assert_eq!(request.subcommand.mode(), ghdl::Mode::Build);
+    }
+
+    #[test]
+    fn verilator_drives_the_sim_face() {
+        let request = run_of(parse(&argv(&["verilator", "--top", "tb"])).unwrap());
+        assert_eq!(request.subcommand, Subcommand::VerilatorSim);
         assert_eq!(request.subcommand.mode(), ghdl::Mode::Sim);
     }
 

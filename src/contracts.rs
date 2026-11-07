@@ -16,9 +16,11 @@
 //! honest so far as probed (a severity-error run continues but still
 //! exits 1), so there the judge is the second witness, not the only one:
 //! either witness convicts, the same as anywhere else in this crate.
-//! iverilog splits the same two ways within one tool: its compile exits
-//! are honest, but vvp exits 0 on a `$error` call -- ghdl's hole again,
-//! the judge load-bearing there.
+//! The Verilog-native tools split the same two ways: iverilog's compile
+//! exits are honest but vvp exits 0 on a `$error` call -- ghdl's hole
+//! again, the judge load-bearing there -- while a verilator model dies
+//! by SIGABRT on every probed failure (no exit code at all, the exit
+//! witness always convicts, the judge second).
 
 use std::fmt;
 use std::str::FromStr;
@@ -147,6 +149,50 @@ pub const IVERILOG_VOCABULARY: &[&str] = &[
     "Unable to find the root module",
 ];
 
+/// verilator's failure faces, probed live on Verilator 5.032 (2026-11-07,
+/// `verilator --lint-only --timing` and `verilator --binary --build
+/// --timing`, model run `./obj_dir/V<top>`): every diagnostic verilator
+/// writes -- lint, build, and the built model's runtime -- leads with its
+/// own `%Severity:` marker, so the faces anchor on the `%Error`/`%Fatal:`
+/// shapes. The lint face is `%Error: broken.v:2:3: syntax error, ...`
+/// above a `    2 |   input a;` / `      |   ^~~~~` caret block, closing
+/// with `%Error: Exiting due to 1 error(s)`, exit 1. In the built model a
+/// `$fatal(1, "the design is wrong")` prints
+/// `%Fatal: tb_fatal.sv:8: Assertion failed in tb_fatal: the design is
+/// wrong`, then `%Error: tb_fatal.sv:8: Verilog $stop` and `Aborting...`,
+/// and the model dies by SIGABRT -- no exit code at all (the shell
+/// reports `Aborted`; a raw spawn sees the signal, not a code, and the
+/// drive records -1) -- so the exit witness convicts on every model
+/// failure probed, and the faces are the second witness. `$error` and
+/// even a plain `$stop` ride the same `%Error:` faces to the same SIGABRT
+/// (the built model, unlike vvp, has no interactive continue), and
+/// `$warning` is the gentler neighbor (`[1000] %Warning:
+/// tb_vwarn.sv:8: tb_vwarn: check flagged`, continuing, exit 0) -- never
+/// judged. The bare `%Error` face (no colon) is deliberate: it subsumes
+/// the coded lint faces too (`%Error-NEEDTIMINGOPT: tb.sv:7:5: Use
+/// --timing or --no-timing to specify how delays should be handled`,
+/// probed on a lint without `--timing`), which share no shape with
+/// `%Error:`. Case-exact: verilator capitalizes its markers, so a
+/// lowercase drift (`%error:`, `%fatal:`) is not one of its faces and
+/// never judges a log.
+pub const VERILATOR_VOCABULARY: &[&str] = &[
+    // `%Error: broken.v:2:3: syntax error, ...` (the lint face, exit 1),
+    // `%Error: Specified --top-module 'nosuch' was not found in design.`
+    // (the lint-time refusal of an unknown top, exit 1),
+    // `%Error: tb_err.sv:8: Assertion failed in tb_err: check failed`
+    // (the model's `$error`, SIGABRT), `%Error: tb_stop.sv:9: Verilog
+    // $stop` (even a plain `$stop` aborts the model), `%Error: Exiting
+    // due to 1 error(s)` (the closing line), and the coded lint faces
+    // (`%Error-NEEDTIMINGOPT: ...`) -- the bare `%Error` face subsumes
+    // them all, probed on verilator 5.032.
+    "%Error",
+    // `%Fatal: tb_fatal.sv:8: Assertion failed in tb_fatal: the design is
+    // wrong` -- the point-of-failure face of a model `$fatal` (the
+    // `%Error: ... Verilog $stop` line follows it, and the model dies by
+    // SIGABRT), probed on verilator 5.032.
+    "%Fatal:",
+];
+
 /// A tool carrying a probed failure vocabulary.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub enum Tool {
@@ -157,6 +203,8 @@ pub enum Tool {
     /// The Icarus Verilog compiler and its `vvp` runtime (Verilog/SV
     /// only).
     Iverilog,
+    /// The Verilator lint and model builder (Verilog/SV only).
+    Verilator,
 }
 
 /// The error for a tool name that resolves to nothing in the registry.
@@ -187,6 +235,7 @@ impl Tool {
             Tool::Ghdl => "ghdl",
             Tool::Nvc => "nvc",
             Tool::Iverilog => "iverilog",
+            Tool::Verilator => "verilator",
         }
     }
 
@@ -197,6 +246,7 @@ impl Tool {
             Tool::Ghdl => GHDL_VOCABULARY,
             Tool::Nvc => NVC_VOCABULARY,
             Tool::Iverilog => IVERILOG_VOCABULARY,
+            Tool::Verilator => VERILATOR_VOCABULARY,
         }
     }
 }
@@ -218,7 +268,7 @@ impl FromStr for Tool {
 
 /// The registry: every tool carrying a probed failure vocabulary.
 pub fn tools() -> &'static [Tool] {
-    &[Tool::Ghdl, Tool::Nvc, Tool::Iverilog]
+    &[Tool::Ghdl, Tool::Nvc, Tool::Iverilog, Tool::Verilator]
 }
 
 /// Judge a tool's log text against its probed failure vocabulary.

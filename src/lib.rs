@@ -17,8 +17,11 @@
 //! - [`nvc`]: the nvc target drives -- the same shapes, nvc's probed faces.
 //! - [`iverilog`]: the iverilog target drives -- one order-free compile,
 //!   one judged `vvp` run.
+//! - [`verilator`]: the verilator target drives -- one lint, per-top
+//!   model builds, judged model runs.
 
 pub mod contracts;
 pub mod ghdl;
 pub mod iverilog;
 pub mod nvc;
+pub mod verilator;

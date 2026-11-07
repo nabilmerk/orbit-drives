@@ -49,3 +49,13 @@ command = ["orbit-contracts", "iverilog"]
 name = "iverilog-build"
 description = "Verilog/SV builds through Icarus Verilog: the one order-free compile into a snapshot, exit honest -- no simulation, nothing judged; every --top a -s root, validated by iverilog at compile time"
 command = ["orbit-contracts", "iverilog-build"]
+
+[[target]]
+name = "verilator"
+description = "Verilog/SV testbenches through verilator: one lint (--timing, every --top a --top-module validated at lint time), one model build per top (--binary --build into obj_dir), each model run gated on verilator's probed failure vocabulary and the model's exit -- every probed model failure dies by SIGABRT"
+command = ["orbit-contracts", "verilator"]
+
+[[target]]
+name = "verilator-build"
+description = "Verilog/SV builds through verilator: the lint and the per-top model builds only, exit honest -- no simulation, nothing judged; the lint exits are honest (exit 1 on a lint error, an unknown --top-module, or an enabled warning)"
+command = ["orbit-contracts", "verilator-build"]

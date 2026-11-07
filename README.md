@@ -67,6 +67,15 @@ Subcommands (one per orbit target entry):
   exits are honest (exit 2 on a parse error, exit 1 on an unknown `-s`
   root, probed live), and every `--top` is validated against the source
   at compile time.
+- `verilator` -- the verilator sim face: one lint, one model build per
+  top, then each model run judged. Every probed model failure dies by
+  SIGABRT (no exit code at all), so the exit convicts and the judge is
+  the second witness.
+- `verilator-build` -- the verilator build face: the lint and the
+  per-top model builds only, exit honest. No simulation, nothing judged:
+  verilator's lint exits are honest (exit 1 on a lint error, on an
+  unknown `--top-module`, and on an enabled warning, probed live), and
+  every `--top` is validated against the source at lint time.
 
 Options:
 
@@ -172,6 +181,49 @@ iverilog's probed process. The differences the probes wrote down:
   failing run; the face in the log is the only witness. The compile
   needs no judge: iverilog's compile exits are honest.
 
+## The verilator drive
+
+Two target entries (`verilator`, `verilator-build`) share one drive on
+verilator's probed process. The differences the probes wrote down:
+
+- **No deferral loop, on probed grounds.** verilator reads all files into
+  one elaboration and is order-free: a consumer-before-provider pair
+  linted and built clean (probed live on Verilator 5.032,
+  2026-11-07). One lint, then per-top builds -- the machinery the
+  stateful VHDL backends need has nothing to do here.
+- **`--timing` is pinned on every verilator argv.** Without it, a
+  delay-carrying file fails the lint
+  (`%Error-NEEDTIMINGOPT: tb.sv:7:5: Use --timing or --no-timing ...`,
+  exit 1, probed live). The drive never relies on the flag's absence:
+  the vocabulary's bare `%Error` face subsumes the coded form either way.
+- **One lint, per-top builds, per-top runs.** The lint runs once over all
+  files with every requested `--top` a `--top-module` (repeated flags
+  probed legal; each name validated by verilator against the source at
+  lint time, `%Error: Specified --top-module 'nosuch' was not found in
+  design.`, exit 1). Each top then gets its own model build
+  (`verilator --binary --build --timing --top-module <top>`, landing
+  `obj_dir/V<top>`) and -- on the sim face -- its own judged run: each
+  testbench is its own simulation, as on the VHDL faces. The model
+  binaries of different tops coexist in the one `obj_dir` (probed side
+  by side).
+- **The language is verilator's default** -- no `--language` pin in v1;
+  the probed fixtures are plain enough to sit inside it. The pinned flags
+  are the probed ones: `--lint-only --timing` on the lint face,
+  `--binary --build --timing` on the build face.
+- **The model directory (`obj_dir/`) is wiped before every drive** --
+  the same correctness-before-incrementality stance, though probed
+  honestly: `--build` regenerates the intermediates and a failed build
+  exits 1 before the sim face could run a stale model, so the wipe is
+  symmetry here, not load-bearing.
+- **The exit is the first witness, the judge the second.** Every model
+  failure probed dies by SIGABRT -- no exit code at all (the shell
+  reports `Aborted`; the drive records -1) -- so the exit convicts on
+  every failure seen, and the faces (`%Fatal:`, `%Error:`) convict
+  regardless. The lint and build faces need no judge: verilator's lint
+  exits are honest -- including on an *enabled warning*
+  (`%Warning-WIDTHTRUNC ...` still exits 1 under `-Wall` and even under
+  `-Wwarn-`, probed live), so a warning face never rides an exit-0 lint.
+
 ## The probed facts
 
 Every pattern in a vocabulary and every drive fact below was probed live
@@ -241,46 +293,78 @@ judges a log. As with the VHDL tools, a testbench's own `$display` that
 embeds a face shape (`ERROR: retrying`) convicts the run -- keep
 `$display` text free of face shapes.
 
+### verilator 5.032
+
+| face / fact | argv that wrote it | what verilator / the model did |
+|------|-----|------|
+| `%Error: broken.v:2:3: syntax error, unexpected input, expecting ';'` (+ caret block, then `%Error: Exiting due to 1 error(s)`) | `verilator --lint-only broken.v` (same through the drive, which pins `--timing`) | the lint-error face, exit 1 -- the lint gates on the exit and is never judged, the face is recorded |
+| `%Error-NEEDTIMINGOPT: tb.sv:7:5: Use --timing or --no-timing to specify how delays should be handled` | `verilator --lint-only tb.sv` (no `--timing`) on a delay-carrying file | the coded lint face, exit 1 -- why the drive pins `--timing` on every argv; the bare `%Error` vocabulary face subsumes the coded form |
+| `%Error: Specified --top-module 'nosuch' was not found in design.` | `verilator --lint-only --timing --top-module nosuch tb.sv ...` | the lint-time refusal of an unknown top, exit 1 -- top names validated at lint time, so the build face carries the check for free |
+| `%Warning-WIDTHTRUNC: ...` still exit 1 | `verilator --lint-only --timing -Wall widthy.sv` (and even under `-Wwarn-WIDTHTRUNC`) | an *enabled warning* fails the lint -- there is no exit-0 warning face in lint land; a warning face never needs judging |
+| `%Fatal: tb_fatal.sv:8: Assertion failed in tb_fatal: the design is wrong`, then `%Error: tb_fatal.sv:8: Verilog $stop`, then `Aborting...` (stdout) | `verilator --binary --build --timing --top-module tb_fatal ... && ./obj_dir/Vtb_fatal` (same through the drive) | a model `$fatal(1, "...")`: the faces land, the model dies by **SIGABRT** -- no exit code at all (shell: `Aborted`; the drive records -1) -- the exit convicts, the face is the second witness |
+| `%Error: tb_err.sv:8: Assertion failed in tb_err: check failed` (+ `%Error: ... Verilog $stop`, `Aborting...`) | `./obj_dir/Vtb_err` on a `$error("...")` call | a model `$error`: the same faces, the same SIGABRT -- unlike vvp's continue-and-exit-0 `$error`, the built model has no interactive continue |
+| `%Error: tb_stop.sv:9: Verilog $stop` (+ `Aborting...`) | `./obj_dir/Vtb_stop` on a plain `$stop` | even a `$stop` aborts the model (SIGABRT) -- a finding on both witnesses; contrast vvp's interactive `$stop` (exit 0, clean) |
+| `[1000] %Warning: tb_vwarn.sv:8: tb_vwarn: check flagged` | `./obj_dir/Vtb_vwarn` on a `$warning` call | the gentler severity in the model, continuing run, **exit 0** -- never judged |
+| `- S i m u l a t i o n   R e p o r t: Verilator 5.032 ...`, `- Verilator: $finish at 1ns ...` | `./obj_dir/Vtb` on a clean run | the clean model's stdout banner -- continuations, never judged |
+| consumer-first lint and build exit 0; repeated and differing `--top-module` flags exit 0; `obj_dir/Vtb` and `obj_dir/Vtb_err` coexist | `verilator --lint-only --timing --top-module tb --top-module tb_err tb.sv tb_err.sv top.sv gate.sv`; `verilator --binary --build --timing --top-module tb top.sv gate.sv tb.sv` | **order-free lint and build** -- one lint, per-top builds into the shared `obj_dir`, no deferral loop; multiple roots share one lint |
+
+verilator's markers are case-exact capitals: a lowercase drift
+(`%error:`, `%fatal:`) is not one of its faces and never judges a log.
+And as with the other tools, a testbench's own `$display` that embeds a
+verilator face shape (`%Error: retrying`) convicts the run -- keep
+`$display` text free of face shapes.
+
 ## Honest limits
 
 - **The filesets are per tool.** The VHDL drives (`ghdl`, `nvc`) carry
-  the `VHDL` fileset only; the iverilog drive carries `VLOG` and `SYSV`
-  (its native filesets) and rejects `VHDL` and custom filesets with a
-  loud exit-2 ("not yet carried"), never a silent skip. Mixed-language
-  designs stay out of the contract.
-- **Four tool names, four vocabularies: ghdl, nvc, iverilog, and the
-  Verilog-native faces they were probed on.** Any other tool name is a
-  loud error at the CLI, never a guess.
+  the `VHDL` fileset only; the Verilog drives (`iverilog`, `verilator`)
+  carry `VLOG` and `SYSV` (their native filesets) and reject `VHDL` and
+  custom filesets with a loud exit-2 ("not yet carried"), never a silent
+  skip. Mixed-language designs stay out of the contract.
+- **Four tool names, four vocabularies: ghdl, nvc, iverilog, verilator.**
+  Any other tool name is a loud error at the CLI, never a guess.
 - **The library column is carried, not mapped.** Every file analyzes
   into the tool's `work` library (ghdl's `work-obj08.cf` clock, nvc's
-  `work/` directory) or compiles into iverilog's one snapshot; a
-  multi-library orbit project is out of scope for v1.
-- **The standards are pinned** (`--std=08` for ghdl, `--std=2008` for
-  nvc, `-g2012` for iverilog) and cannot be overridden from the argv
-  yet; the extras reach the drive's last step only (`-r` on the VHDL sim
-  faces, `vvp` on iverilog's; `-e`/the compile on the build faces).
+  `work/` directory), compiles into iverilog's one snapshot, or lints
+  and builds as one verilator fileset; a multi-library orbit project is
+  out of scope for v1.
+- **The standards are pinned where the tools pin them** (`--std=08` for
+  ghdl, `--std=2008` for nvc, `-g2012` for iverilog; verilator's pinned
+  flags are `--timing` and the face flags -- its language setting stays
+  verilator's default in v1) and cannot be overridden from the argv yet;
+  the extras reach the drive's last step only (`-r` on the VHDL sim
+  faces, `vvp` on iverilog's, the model argv on verilator's; the
+  elaboration / compile / build argv on the build faces).
 - **The state is run-scoped, not incremental.** Every drive wipes its
-  clock first (the work libraries; iverilog's snapshot). A large design
-  pays a full re-analysis per drive; correctness before incrementality
-  is the v1 stance. (Probed honestly: ghdl's wipe is load-bearing -- a
-  stale library obsoletes its own design; nvc tolerates the stale
-  library and iverilog's snapshot cannot be run past a failed compile,
-  so those wipes are symmetry.)
+  clock first (the work libraries; iverilog's snapshot; verilator's
+  `obj_dir`). A large design pays a full re-analysis per drive;
+  correctness before incrementality is the v1 stance. (Probed honestly:
+  ghdl's wipe is load-bearing -- a stale library obsoletes its own
+  design; nvc tolerates the stale library, iverilog's snapshot cannot be
+  run past a failed compile, and verilator's `--build` regenerates its
+  intermediates, so those wipes are symmetry.)
 - **Bare ghdl and bare vvp have holes; the shipped paths catch them.**
   A `report ... severity error` statement slips a bare `ghdl -r` (face
   `(report error)`, exit 0, no judged face): the drive pins
   `--assert-level=error`, which stops the run and writes the
   `./<top>:error: report failed` face. A `$error` call slips a bare vvp
   (face `ERROR: ...`, simulation continued, **exit 0**): there the
-  judge's face gate is the only witness, and it is load-bearing. nvc has
-  no such hole probed: its severity-error runs continue the simulation
-  but still exit 1.
+  judge's face gate is the only witness, and it is load-bearing. nvc and
+  verilator have no such hole probed: nvc's severity-error runs continue
+  the simulation but still exit 1, and every verilator model failure
+  dies by SIGABRT -- no exit code at all -- so the exit convicts.
 - **A face shape mid-text judges fail.** The vocabularies are case-exact
   substrings and cannot tell your prose from the tool's: a testbench's
   own report note that embeds a ghdl face shape (`bus:error: retrying`),
-  an nvc face shape (`** Error: retrying`), or a vvp face shape
-  (`ERROR: retrying`) convicts the run. Keep report notes and `$display`
-  text free of face shapes.
+  an nvc face shape (`** Error: retrying`), a vvp face shape
+  (`ERROR: retrying`), or a verilator face shape (`%Error: retrying`)
+  convicts the run. Keep report notes and `$display` text free of face
+  shapes.
+- **Verilator builds need a C++ toolchain.** `--binary --build` shells
+  out to `make` and the system C++ compiler (probed on this box with
+  both on PATH); a box without them fails the build step loudly,
+  surfaced as an exit-1 build failure with the toolchain's own output
+  relayed.
 - **The run log is captured, then relayed**, not streamed; a long
   simulation's output appears when the run ends.
 - **The tools resolve on PATH.** The orbit target contract carries no
@@ -295,11 +379,11 @@ embeds a face shape (`ERROR: retrying`) convicts the run -- keep
 ```sh
 cargo test            # the contract, drive, and argv suites
 cargo test -- --ignored   # + the real-spawn tests: the real binary, real
-                          # ghdl, nvc, and iverilog, the real orbit spawn
-                          # shape, order-dependent blueprints through the
-                          # deferral loop, judged severity failures and
-                          # $fatal/$error calls, twice in one output
-                          # directory, and the build faces
+                          # ghdl, nvc, iverilog, and verilator, the real
+                          # orbit spawn shape, order-dependent blueprints
+                          # through the deferral loop, judged severity
+                          # failures and $fatal/$error calls, twice in
+                          # one output directory, and the build faces
 ```
 
 The contract suite (`tests/contracts.rs`) ports the aquila contract tests
@@ -307,10 +391,10 @@ fixture-for-fixture (upstream: `github.com/chaseruskin/aquila`,
 `tests/test_contracts.py`) and extends them with the probed faces of the
 other tools: the real failing logs judge fail; the clean logs (including
 the one mentioning "ERROR" mid-text) judge pass; the uppercase (ghdl) and
-lowercase (nvc, vvp) drifts never judge; the severity-error and `$error`
-faces judge fail; the warning/note faces stay clean; and the registry
-pins exactly the carried tools. The drive suites pin the deferral loop (a
-consumer-before-provider pair must retry), the no-progress stop, the TSV
-blueprint parse, the crash door (a clean log does not green-light a
-nonzero exit), and the judge gate on fake severity-error logs for both
-VHDL tools.
+lowercase (nvc, vvp, verilator) drifts never judge; the severity-error,
+`$error`, and model-abort faces judge fail; the warning/note faces stay
+clean; and the registry pins exactly the carried tools. The drive suites
+pin the deferral loop (a consumer-before-provider pair must retry), the
+no-progress stop, the TSV blueprint parse, the crash door (a clean log
+does not green-light a nonzero exit), and the judge gate on fake
+severity-error logs for the VHDL tools.

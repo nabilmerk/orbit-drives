@@ -155,7 +155,10 @@ fn unknown_tool_is_an_error() {
 fn vocabulary_registry() {
     // The registry carries exactly the probed tools, and ghdl's vocabulary
     // is the three probed faces, in probed order.
-    assert_eq!(contracts::tools(), &[Tool::Ghdl, Tool::Nvc, Tool::Iverilog]);
+    assert_eq!(
+        contracts::tools(),
+        &[Tool::Ghdl, Tool::Nvc, Tool::Iverilog, Tool::Verilator]
+    );
     assert_eq!(Tool::Ghdl.name(), "ghdl");
     assert_eq!(
         Tool::Ghdl.vocabulary(),
@@ -448,4 +451,163 @@ fn iv_vocabulary_is_the_four_probed_faces() {
             "Unable to find the root module",
         ]
     );
+}
+
+// ===== the verilator vocabulary, probed live on Verilator 5.032,
+// 2026-11-07 =====
+
+// a real model $fatal run (`verilator --binary --build --timing
+// --top-module tb_fatal ... && ./obj_dir/Vtb_fatal`): the model prints
+// the %Fatal face, the %Error $stop line, and `Aborting...`, then dies
+// by SIGABRT -- no exit code at all (the shell reports `Aborted`; the
+// drive records -1). The exit convicts AND the face convicts.
+const VER_FATAL_LOG: &str = "\
+[1000] %Fatal: tb_fatal.sv:8: Assertion failed in tb_fatal: the design is wrong
+%Error: tb_fatal.sv:8: Verilog $stop
+Aborting...
+";
+
+// the model's $error (`./obj_dir/Vtb_err`): the same %Error face and the
+// same SIGABRT -- the built model, unlike vvp, has no interactive
+// continue. Either witness convicts; here both do.
+const VER_ERROR_LOG: &str = "\
+[1000] %Error: tb_err.sv:8: Assertion failed in tb_err: check failed
+%Error: tb_err.sv:8: Verilog $stop
+Aborting...
+";
+
+// even a plain `$stop` aborts the model (`./obj_dir/Vtb_stop`): unlike
+// vvp's interactive $stop (exit 0), the built model has no continue.
+const VER_STOP_LOG: &str = "\
+stopping now
+%Error: tb_stop.sv:9: Verilog $stop
+Aborting...
+";
+
+// the lint face (`verilator --lint-only broken.v`, exit 1, stderr): the
+// %Error line above its caret block, closing with the Exiting line. A
+// run log never carries it -- the lint step is never judged -- but the
+// face is probed and recorded, per the nvc precedent.
+const VER_LINT_ERROR_LOG: &str = "\
+%Error: broken.v:2:3: syntax error, unexpected input, expecting ';'
+    2 |   input a;
+      |   ^~~~~
+%Error: Exiting due to 1 error(s)
+";
+
+// the lint-time refusal of an unknown top (`verilator --lint-only
+// --timing --top-module nosuch ...`, exit 1): top names are validated at
+// lint time, so the build face carries the check for free.
+const VER_UNKNOWN_TOP_LOG: &str = "\
+%Error: Specified --top-module 'nosuch' was not found in design.
+%Error: Exiting due to 1 error(s)
+";
+
+// the coded lint face (`verilator --lint-only` without --timing, exit
+// 1): it shares no shape with `%Error:` -- the bare `%Error` face
+// subsumes it.
+const VER_CODED_ERROR_LOG: &str = "\
+%Error-NEEDTIMINGOPT: tb.sv:7:5: Use --timing or --no-timing to specify how delays should be handled
+                               : ... note: In instance 'tb'
+    7 |     #1;
+      |     ^
+                      ... For error description see https://verilator.org/warn/NEEDTIMINGOPT?v=5.032
+%Error: Exiting due to 1 error(s)
+";
+
+// the gentler neighbors, probed live on a continuing run that exits 0:
+// the model's $warning face, the testbench's own $display, the $finish
+// line, and the Simulation Report banner -- continuations, not
+// failures, so they must never judge a log
+const VER_WARNING_LOG: &str = "\
+[1000] %Warning: tb_vwarn.sv:8: tb_vwarn: check flagged
+all quiet
+- tb_vwarn.sv:10: Verilog $finish
+- S i m u l a t i o n   R e p o r t: Verilator 5.032 2025-01-01
+- Verilator: $finish at 1ns; walltime 0.001 s; speed 674.149 ns/s
+- Verilator: cpu 0.001 s on 1 threads; alloced 121 MB
+";
+
+// the probed failure logs with every face drifted to lowercase: not a
+// single one of verilator's faces, since verilator capitalizes its
+// markers
+const VER_LOWERCASE_DRIFT_LOG: &str = "\
+[1000] %fatal: tb_fatal.sv:8: Assertion failed in tb_fatal: the design is wrong
+%error: tb_err.sv:8: Assertion failed in tb_err: check failed
+%error: Specified --top-module 'nosuch' was not found in design.
+";
+
+#[test]
+fn ver_fatal_log_judges_fail() {
+    // The probed model $fatal log judges FAIL -- and the model's
+    // SIGABRT death convicts the same run on the exit witness too.
+    assert!(!contracts::judge(&Tool::Verilator, VER_FATAL_LOG));
+}
+
+#[test]
+fn ver_error_and_stop_logs_judge_fail() {
+    // The model's $error and $stop faces judge FAIL: the built model
+    // aborts on both (SIGABRT), unlike vvp's continue-and-exit-0 $error
+    // and interactive $stop.
+    assert!(!contracts::judge(&Tool::Verilator, VER_ERROR_LOG));
+    assert!(!contracts::judge(&Tool::Verilator, VER_STOP_LOG));
+}
+
+#[test]
+fn ver_lint_and_top_faces_judge_fail() {
+    // The probed lint faces judge FAIL. Recorded for the vocabulary's
+    // completeness; the lint step gates on verilator's honest exit
+    // (exit 1) and is never judged.
+    assert!(!contracts::judge(&Tool::Verilator, VER_LINT_ERROR_LOG));
+    assert!(!contracts::judge(&Tool::Verilator, VER_UNKNOWN_TOP_LOG));
+}
+
+#[test]
+fn ver_coded_error_face_judges_fail() {
+    // The coded lint face (`%Error-NEEDTIMINGOPT:`) judges FAIL through
+    // the bare `%Error` face: it shares no shape with `%Error:`, which
+    // is why the face carries no colon.
+    assert!(!contracts::judge(&Tool::Verilator, VER_CODED_ERROR_LOG));
+}
+
+#[test]
+fn ver_warning_stays_clean() {
+    // The probed continuation faces (`%Warning:`, the report banner)
+    // judge PASS: they are not failures.
+    assert!(contracts::judge(&Tool::Verilator, VER_WARNING_LOG));
+}
+
+#[test]
+fn ver_lowercase_drift_never_matches() {
+    // A lowercase drift of every verilator face judges PASS: verilator
+    // capitalizes its markers, case-exactly.
+    assert!(contracts::judge(&Tool::Verilator, VER_LOWERCASE_DRIFT_LOG));
+}
+
+#[test]
+fn ver_each_face_alone_judges_fail() {
+    // Each of verilator's faces judges FAIL on its own, in an otherwise
+    // clean log.
+    for face in Tool::Verilator.vocabulary() {
+        let log = format!("- Verilator: $finish at 1ns\nnoise {face} tail\n");
+        assert!(
+            !contracts::judge(&Tool::Verilator, &log),
+            "face {face:?} did not judge its log"
+        );
+    }
+}
+
+#[test]
+fn ver_empty_log_judges_pass() {
+    // An empty log carries no failure face, so it judges PASS.
+    assert!(contracts::judge(&Tool::Verilator, ""));
+}
+
+#[test]
+fn ver_vocabulary_is_the_two_probed_faces() {
+    // verilator's vocabulary is the two probed faces: the bare `%Error`
+    // (subsuming the coded lint faces) and the `%Fatal:` point-of-
+    // failure face.
+    assert_eq!(Tool::Verilator.name(), "verilator");
+    assert_eq!(Tool::Verilator.vocabulary(), &["%Error", "%Fatal:"]);
 }
