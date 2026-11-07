@@ -20,7 +20,7 @@ use std::env;
 use std::path::PathBuf;
 use std::process::ExitCode;
 
-use orbit_drives::{blueprint, ghdl, iverilog, nvc, verilator, yosys};
+use orbit_drives::{blueprint, ghdl, iverilog, nvc, verilator, vivado, yosys};
 
 const USAGE: &str = "\
 orbit-drives: the probed failure vocabularies and the honest-exit targets for orbit
@@ -73,11 +73,32 @@ SUBCOMMANDS:
                  the exit convicts and the judge is the second witness.
                  Build only: yosys has no runtime, there is no sim face
                  and nothing runs
+    vivado-build compile both languages (xvhdl per VHDL file with the
+                 deferral loop, one order-free xvlog), then per top the
+                 GENERATED synthesis script through `vivado -mode batch`
+                 (one read per file, synth_design -top -part -mode
+                 out_of_context, three netlist writers into netlists/,
+                 the body inside one return-code catch-guard), exit
+                 honest; no simulation and nothing judged. Requires
+                 --part BEFORE any drive (exit 2 at the CLI: the probed
+                 alternative is a ~4s synth-then-fail inside the tool)
+                 (the vivado build face)
+    vivado       the same compile, then the judged runs: xelab per top
+                 (-L work work.<top> -s <top>), xsim per snapshot (-R),
+                 every run log gated on vivado's probed LINE-START
+                 failure vocabulary AND the exit -- xsim exits 0 on both
+                 probed runtime failures (a severity failure AND a
+                 severity error), so the judge is the load-bearing gate
+                 (the vivado sim face)
 
 SHARED OPTIONS:
     --blueprint <path>  the TSV blueprint (default: $ORBIT_BLUEPRINT)
     --top <name>        a top unit to elaborate (and run: the sim
                         faces); repeatable
+    --part <part>       the FPGA part vivado-build synthesizes for
+                        (e.g. xc7z010clg400-1); REQUIRED on vivado-build
+                        (exit 2 without it), rejected on every other
+                        face (loud exit-2: this flag is that face's)
     -h, --help          print this help
 
 TOPS:
@@ -87,12 +108,21 @@ TOPS:
 
 EXTRAS:
     every other argument rides the drive's LAST tool argv verbatim: the
-    `ghdl -r` / `nvc -r` / `vvp` / model argv on the sim faces, the
-    `ghdl -e` / `nvc -e` / `iverilog` compile / verilator build argv on
-    the build faces (there is no run to carry them, and a dropped
-    argument would be a silent degradation). Orbit strips its own `--`
-    separator and appends the extras straight onto this argv, so `orbit
-    test --target ghdl -- -gW=4 --vcd=w.vcd` passes both through to ghdl
+    `ghdl -r` / `nvc -r` / `vvp` / model / xsim argv on the sim faces,
+    the `ghdl -e` / `nvc -e` / `iverilog` compile / verilator build /
+    `yosys -p` synth / `vivado -mode batch` argv on the build faces
+    (there is no run to carry them, and a dropped argument would be a
+    silent degradation). Orbit strips its own `--` separator and appends
+    the extras straight onto this argv, so `orbit test --target ghdl --
+    -gW=4 --vcd=w.vcd` passes both through to ghdl
+
+VIVADO ON THIS BOX:
+    every vivado-family spawn needs the launch recipe env -- the drive
+    sets LOCPATH / LC_ALL / LD_LIBRARY_PATH on every spawn itself (the
+    environment's own values win; the probed defaults otherwise) -- and
+    the binaries resolve from $VIVADO_BIN (the install path), the stage
+    binaries (xvhdl/xvlog/xelab/xsim) riding beside it. See the README's
+    launch-recipe section
 
 EXITS:
     0    clean (every run judged clean, or every top elaborated clean)
@@ -134,6 +164,12 @@ enum Subcommand {
     /// `yosys`: the synthesis face -- one script-driven synth per top,
     /// the netlists as payload. Build only: there is no sim face.
     Yosys,
+    /// `vivado-build`: vivado's build face -- both languages compiled,
+    /// then the generated synthesis per top, the netlists as payload.
+    VivadoBuild,
+    /// `vivado`: vivado's sim face -- the compile, then the judged
+    /// xelab + xsim runs.
+    VivadoSim,
 }
 
 impl Subcommand {
@@ -145,13 +181,15 @@ impl Subcommand {
             | Subcommand::NvcBuild
             | Subcommand::IverilogBuild
             | Subcommand::VerilatorBuild
+            | Subcommand::VivadoBuild
             // yosys is build-only; the arm exists for match totality --
             // its drive takes no mode, so this value is never read.
             | Subcommand::Yosys => blueprint::Mode::Build,
             Subcommand::GhdlSim
             | Subcommand::NvcSim
             | Subcommand::IverilogSim
-            | Subcommand::VerilatorSim => blueprint::Mode::Sim,
+            | Subcommand::VerilatorSim
+            | Subcommand::VivadoSim => blueprint::Mode::Sim,
         }
     }
 }
@@ -161,7 +199,7 @@ impl Subcommand {
 fn unknown_subcommand(name: &str) -> String {
     format!(
         "no target named {name:?}: carried subcommands: ghdl, ghdl-build, nvc, nvc-build, \
-         iverilog, iverilog-build, verilator, verilator-build, yosys"
+         iverilog, iverilog-build, verilator, verilator-build, yosys, vivado, vivado-build"
     )
 }
 
@@ -183,6 +221,8 @@ struct Request {
     blueprint: Option<PathBuf>,
     /// The `--top` units, in the order given.
     tops: Vec<String>,
+    /// The `--part` FPGA part, when given (vivado-build's flag only).
+    part: Option<String>,
     /// The argv after `--`, appended to the drive's last tool argv.
     extra: Vec<String>,
 }
@@ -209,11 +249,14 @@ fn parse(argv: &[String]) -> Result<Cli, CliError> {
         "verilator-build" => Subcommand::VerilatorBuild,
         "verilator" => Subcommand::VerilatorSim,
         "yosys" => Subcommand::Yosys,
+        "vivado-build" => Subcommand::VivadoBuild,
+        "vivado" => Subcommand::VivadoSim,
         other => return Err(CliError(unknown_subcommand(other))),
     };
 
     let mut blueprint: Option<PathBuf> = None;
     let mut tops = Vec::new();
+    let mut part: Option<String> = None;
     let mut extra = Vec::new();
     let mut rest = argv[1..].iter();
     while let Some(arg) = rest.next() {
@@ -230,6 +273,22 @@ fn parse(argv: &[String]) -> Result<Cli, CliError> {
                     .next()
                     .ok_or_else(|| CliError("--top needs a unit name".to_string()))?;
                 tops.push(value.clone());
+            }
+            // The part is vivado-build's flag, and that face's alone: on
+            // any other face it is a loud usage error, never a dropped
+            // argument -- the sim face consumes no part, and the other
+            // tools do not speak one.
+            "--part" => {
+                if subcommand != Subcommand::VivadoBuild {
+                    return Err(CliError(
+                        "--part is the vivado-build face's flag: this face consumes no part"
+                            .to_string(),
+                    ));
+                }
+                let value = rest
+                    .next()
+                    .ok_or_else(|| CliError("--part needs a part name".to_string()))?;
+                part = Some(value.clone());
             }
             // Orbit strips its own separator before this argv lands here,
             // so this only fires on direct drives: everything after it
@@ -248,6 +307,7 @@ fn parse(argv: &[String]) -> Result<Cli, CliError> {
         subcommand,
         blueprint,
         tops,
+        part,
         extra,
     }))
 }
@@ -305,6 +365,20 @@ fn drive_request(request: Request) -> ExitCode {
         );
         return ExitCode::from(2);
     }
+    // The part gate, BEFORE any drive: the vivado build face names the
+    // FPGA part its synthesis targets, and the probed alternative -- a
+    // part-less `synth_design` failing inside the tool after ~4s of
+    // synthesis -- is exactly what the exit-2 gate prevents. Every other
+    // face never sees the flag (the argv parser rejects it), so this
+    // gate fires only where the part is required.
+    if request.subcommand == Subcommand::VivadoBuild && request.part.is_none() {
+        eprintln!(
+            "orbit-drives: error: no part to synthesize: pass --part <part> (e.g. \
+             --part xc7z010clg400-1): the vivado-build face names the FPGA part before \
+             any drive"
+        );
+        return ExitCode::from(2);
+    }
     if defaulted {
         eprintln!(
             "orbit-drives: note: no --top given; taking the testbench $ORBIT_TB_NAME: {}",
@@ -317,6 +391,7 @@ fn drive_request(request: Request) -> ExitCode {
                 blueprint,
                 tops,
                 extra: request.extra,
+                part: request.part,
             },
             request.subcommand.mode(),
         )
@@ -326,6 +401,7 @@ fn drive_request(request: Request) -> ExitCode {
                 blueprint,
                 tops,
                 extra: request.extra,
+                part: request.part,
             },
             request.subcommand.mode(),
         )
@@ -335,6 +411,7 @@ fn drive_request(request: Request) -> ExitCode {
                 blueprint,
                 tops,
                 extra: request.extra,
+                part: request.part,
             },
             request.subcommand.mode(),
         )
@@ -344,6 +421,7 @@ fn drive_request(request: Request) -> ExitCode {
                 blueprint,
                 tops,
                 extra: request.extra,
+                part: request.part,
             },
             request.subcommand.mode(),
         )
@@ -352,7 +430,18 @@ fn drive_request(request: Request) -> ExitCode {
             blueprint,
             tops,
             extra: request.extra,
+            part: request.part,
         })
+        .map_err(|e| e.exit_code()),
+        Subcommand::VivadoBuild | Subcommand::VivadoSim => vivado::drive(
+            &blueprint::Drive {
+                blueprint,
+                tops,
+                extra: request.extra,
+                part: request.part,
+            },
+            request.subcommand.mode(),
+        )
         .map_err(|e| e.exit_code()),
     };
     match outcome {
@@ -511,6 +600,46 @@ mod tests {
         let request = run_of(parse(&argv(&["yosys", "--top", "top"])).unwrap());
         assert_eq!(request.subcommand, Subcommand::Yosys);
         assert_eq!(request.subcommand.mode(), blueprint::Mode::Build);
+    }
+
+    #[test]
+    fn vivado_build_is_its_own_subcommand_driving_the_build_face() {
+        let request =
+            run_of(parse(&argv(&["vivado-build", "--top", "top", "--part", "p"])).unwrap());
+        assert_eq!(request.subcommand, Subcommand::VivadoBuild);
+        assert_eq!(request.subcommand.mode(), blueprint::Mode::Build);
+        assert_eq!(request.part, Some("p".to_string()));
+    }
+
+    #[test]
+    fn vivado_drives_the_sim_face_and_carries_no_part() {
+        // The sim face consumes no part: the flag is not merely ignored,
+        // it is rejected loudly -- a dropped argument would be a
+        // silent degradation.
+        assert!(parse(&argv(&["vivado", "--top", "tb", "--part", "p"])).is_err());
+        let request = run_of(parse(&argv(&["vivado", "--top", "tb"])).unwrap());
+        assert_eq!(request.subcommand, Subcommand::VivadoSim);
+        assert_eq!(request.subcommand.mode(), blueprint::Mode::Sim);
+        assert_eq!(request.part, None);
+    }
+
+    #[test]
+    fn the_part_flag_is_vivado_builds_alone() {
+        // Every other face rejects --part at the parse: the other tools
+        // do not speak one.
+        assert!(parse(&argv(&["ghdl", "--top", "tb", "--part", "p"])).is_err());
+        assert!(parse(&argv(&["yosys", "--top", "top", "--part", "p"])).is_err());
+        let err = parse(&argv(&["verilator", "--top", "tb", "--part"])).unwrap_err();
+        assert!(
+            err.0.contains("vivado-build face's flag"),
+            "the rejection should name the flag's face: {}",
+            err.0
+        );
+    }
+
+    #[test]
+    fn a_dangling_part_is_a_loud_usage_error() {
+        assert!(parse(&argv(&["vivado-build", "--part"])).is_err());
     }
 
     #[test]

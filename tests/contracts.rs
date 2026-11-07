@@ -162,7 +162,8 @@ fn vocabulary_registry() {
             Tool::Nvc,
             Tool::Iverilog,
             Tool::Verilator,
-            Tool::Yosys
+            Tool::Yosys,
+            Tool::Vivado
         ]
     );
     assert_eq!(Tool::Ghdl.name(), "ghdl");
@@ -728,4 +729,154 @@ fn yos_vocabulary_is_the_one_probed_face() {
     // every probed failure face, line-start and mid-line alike.
     assert_eq!(Tool::Yosys.name(), "yosys");
     assert_eq!(Tool::Yosys.vocabulary(), &["ERROR:"]);
+}
+
+// ===== the vivado vocabulary, probed live on Vivado 2025.2.1, 2026-11-07 =====
+
+// a real xsim severity-failure run (`xsim tb_fail -R` after xvhdl/xelab):
+// the face lands at line start and the run EXITS 0 -- the lie this
+// vocabulary exists for
+const VIV_FAILURE_LOG: &str = "\
+source xsim.dir/tb_fail/xsim_script.tcl
+# xsim {tb_fail} -autoloadwcfg -runall
+Time resolution is 1 ps
+run -all
+Failure: the design is wrong
+Time: 1 ns  Iteration: 0  Process: /tb_fail/stim  File: ./tb_fail.vhd
+$finish called at time : 1 ns
+exit
+INFO: [Common 17-206] Exiting xsim at Sat Nov  7 18:07:29 2026...
+";
+
+// a real xsim severity-error run (`xsim tb_err -R`): the face, then the
+// continuation note, then exit 0 -- the same lie
+const VIV_ERROR_LOG: &str = "\
+run -all
+Error: check failed
+Time: 1 ns  Iteration: 0  Process: /tb_err/stim  File: ./tb_err.vhd
+Note: continued past the error
+Time: 1 ns  Iteration: 0  Process: /tb_err/stim  File: ./tb_err.vhd
+exit
+";
+
+// a clean run (`xsim tb_clean -R`): the severity-note face of a passing
+// report and the kernel INFO lines -- continuations, never judged
+const VIV_CLEAN_LOG: &str = "\
+run -all
+Note: sim done
+Time: 1 ns  Iteration: 0  Process: /tb_clean/stim  File: ./tb_clean.vhd
+exit
+INFO: xsimkernel Simulation Memory Usage: 269612 KB (Peak: 335148 KB)
+INFO: [Common 17-206] Exiting xsim at Sat Nov  7 18:07:16 2026...
+";
+
+// the probed compile and elaboration faces (xvhdl and xelab, exit 1 on
+// stdout): UPPERCASE `ERROR:`, deliberately outside the vocabulary -- the
+// compile steps gate on their honest exits and are never judged, and the
+// case-exactness of the mixed-case markers holds this door
+const VIV_COMPILE_ERROR_LOG: &str = "\
+INFO: [VRFC 10-163] Analyzing VHDL file \"./broken.vhd\" into library work
+ERROR: [VRFC 10-4982] syntax error near 'end' [./broken.vhd:9]
+ERROR: [VRFC 10-2989] 'y' is not declared [./broken.vhd:8]
+INFO: [VRFC 10-8704] VHDL file './broken.vhd' is ignored due to errors
+";
+
+// the probed order-sensitivity face (xvhdl, consumer before provider):
+const VIV_ORDER_ERROR_LOG: &str = "\
+ERROR: [VRFC 10-2987] 'top' is not compiled in library 'work' [./tb_clean.vhd:11]
+ERROR: [VRFC 10-9458] unit 'sim' is ignored due to previous errors [./tb_clean.vhd:7]
+";
+
+// the probed crash door (xsim on a missing snapshot, exit 1): an
+// uppercase face the vocabulary does not carry -- the exit witness
+// convicts
+const VIV_MISSING_SNAPSHOT_LOG: &str = "\
+ERROR: Please check the snapshot name which is created during 'xelab',the current snapshot name \"xsim.dir/nosuch_snap/xsimk\" does not exist
+";
+
+#[test]
+fn viv_failure_log_judges_fail() {
+    // The probed severity-failure log judges FAIL -- while xsim exits 0
+    // on that very run (probed live), so the face is the only witness.
+    assert!(!contracts::judge(&Tool::Vivado, VIV_FAILURE_LOG));
+}
+
+#[test]
+fn viv_error_log_judges_fail() {
+    // The probed severity-error log judges FAIL the same way: the run
+    // continues and exits 0.
+    assert!(!contracts::judge(&Tool::Vivado, VIV_ERROR_LOG));
+}
+
+#[test]
+fn viv_clean_log_judges_pass() {
+    // A clean xsim log judges PASS: the `Note:` face and the kernel INFO
+    // lines are continuations, never judged.
+    assert!(contracts::judge(&Tool::Vivado, VIV_CLEAN_LOG));
+}
+
+#[test]
+fn viv_compile_faces_never_judge() {
+    // The compile, order-sensitivity, elaboration, and crash-door faces
+    // are UPPERCASE `ERROR:` -- not among the mixed-case markers, by
+    // design: those stages gate on their honest exits.
+    assert!(contracts::judge(&Tool::Vivado, VIV_COMPILE_ERROR_LOG));
+    assert!(contracts::judge(&Tool::Vivado, VIV_ORDER_ERROR_LOG));
+    assert!(contracts::judge(&Tool::Vivado, VIV_MISSING_SNAPSHOT_LOG));
+}
+
+#[test]
+fn viv_faces_are_line_anchored() {
+    // The line anchor, pinned both ways per marker: at line start the
+    // face judges; mid-line -- a testbench's own report note, an echoed
+    // source line -- it never judges, and neither does the case drift.
+    for face in ["Fatal:", "Error:", "Failure:"] {
+        let clean_midline = format!("the sim says: {face} retrying\n");
+        assert!(
+            contracts::judge(&Tool::Vivado, &clean_midline),
+            "mid-line {face:?} judged a log"
+        );
+        let drifted = format!("{}\n{}", face.to_uppercase(), "  indented");
+        assert!(
+            contracts::judge(&Tool::Vivado, &drifted),
+            "the case drift of {face:?} judged a log"
+        );
+        let clean_indented = format!("  {face} the design is wrong\n");
+        assert!(
+            contracts::judge(&Tool::Vivado, &clean_indented),
+            "an indented {face:?} judged a log"
+        );
+        let failing = format!("Noise first\n{face} the design is wrong\n");
+        assert!(
+            !contracts::judge(&Tool::Vivado, &failing),
+            "the line-start {face:?} face did not judge its log"
+        );
+    }
+}
+
+#[test]
+fn viv_each_face_alone_judges_fail() {
+    // Each of vivado's faces judges FAIL on its own, in an otherwise
+    // clean log.
+    for face in Tool::Vivado.vocabulary() {
+        let log = format!("INFO: [Common 17-206] Exiting xsim\n{face} tail\n");
+        assert!(
+            !contracts::judge(&Tool::Vivado, &log),
+            "face {face:?} did not judge its log"
+        );
+    }
+}
+
+#[test]
+fn viv_empty_log_judges_pass() {
+    // An empty log carries no failure face, so it judges PASS.
+    assert!(contracts::judge(&Tool::Vivado, ""));
+}
+
+#[test]
+fn viv_vocabulary_is_the_three_probed_markers() {
+    // vivado's vocabulary is the three probed line-start markers, in
+    // probed order.
+    assert_eq!(Tool::Vivado.name(), "vivado");
+    assert_eq!(Tool::Vivado.vocabulary(), &["Fatal:", "Error:", "Failure:"]);
 }

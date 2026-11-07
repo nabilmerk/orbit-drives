@@ -20,7 +20,24 @@
 //! exits are honest but vvp exits 0 on a `$error` call -- ghdl's hole
 //! again, the judge load-bearing there -- while a verilator model dies
 //! by SIGABRT on every probed failure (no exit code at all, the exit
-//! witness always convicts, the judge second).
+//! witness always convicts, the judge second). yosys's exits are honest
+//! on every probed failure (a `-p` script error aborts the whole script),
+//! the judge second there too. Vivado is the extreme: xsim exits 0 on
+//! BOTH probed runtime failures -- a violated severity failure AND a
+//! violated severity error -- so there the judge is not the second
+//! witness, it is the only one.
+//!
+//! Matching is case-exact, and exactly one vocabulary is line-anchored.
+//! Every face searches as a plain substring because the tools write
+//! their faces mid-line: ghdl opens its failure lines with the offending
+//! file path or the image name, not with the severity; nvc leads every
+//! diagnostic with its own `** Severity:` marker; yosys's syntax face
+//! carries its marker behind the source location. Vivado's xsim is the
+//! exception that wrote the rule: its run faces LEAD their lines with
+//! the bare marker (`Failure: the design is wrong`), and its probed
+//! negative pins -- a case drift (`FATAL:`) and a marker mid-line -- hold
+//! only if the search anchors on the line start
+//! ([`Tool::line_anchored`]).
 
 use std::fmt;
 use std::str::FromStr;
@@ -215,6 +232,33 @@ pub const VERILATOR_VOCABULARY: &[&str] = &[
 /// its faces and never judges a log.
 pub const YOSYS_VOCABULARY: &[&str] = &["ERROR:"];
 
+/// Vivado's failure faces, probed live on Vivado 2025.2.1 (2026-11-07,
+/// `xsim <snapshot> -R` after `xvhdl`/`xelab`, plus the hdlm project's
+/// 2025.2.1 probe record): the RUN faces lead their lines with the bare
+/// severity marker -- `Failure: the design is wrong` under a violated
+/// `assert ... severity failure`, `Error: check failed` under a violated
+/// `severity error` -- and xsim EXITS 0 on both (probed live: the run
+/// continues past the error, `$finish called` follows, and the process
+/// exits 0). The run exit is a lie; the log is the only truth, and this
+/// is the one vocabulary in this registry where the judge is the
+/// load-bearing gate. The faces are LINE-ANCHORED, the only such
+/// vocabulary here, because the negative pins demand it: a case drift
+/// (`FATAL:` at line start) is not one of xsim's faces and must never
+/// judge, and a marker mid-line (a source line, a testbench's own report
+/// note, the echoed Tcl banner) must never judge either -- only a line
+/// that LEADS with the marker convicts. The gentler neighbors (`Warning:`,
+/// `Note:` lines on continuing runs that exit 0, probed) are not failures
+/// and stay out. The compile faces are recorded but NOT carried:
+/// xvhdl/xvlog/xelab write UPPERCASE `ERROR: [VRFC 10-xxxx] ...` faces
+/// (all diagnostics on stdout -- stderr is empty on every drive, error or
+/// clean, probed) and their exits are honest (exit 1 on every probed
+/// compile failure), so the compile steps gate on the exit and are never
+/// judged -- an uppercase face could not be judged by these mixed-case
+/// markers anyway, and that is deliberate. `Fatal:` rides the vocabulary
+/// per the hdlm probe record (the xsim kernel's fatal face); it never
+/// fired in this pass's own probes.
+pub const VIVADO_VOCABULARY: &[&str] = &["Fatal:", "Error:", "Failure:"];
+
 /// A tool carrying a probed failure vocabulary.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub enum Tool {
@@ -229,6 +273,9 @@ pub enum Tool {
     Verilator,
     /// The yosys synthesis engine (`yosys`, Verilog/SV synthesis only).
     Yosys,
+    /// The Vivado toolchain -- xvhdl/xvlog/xelab/xsim and the batch
+    /// synthesizer (`vivado`, VHDL and Verilog/SV).
+    Vivado,
 }
 
 /// The error for a tool name that resolves to nothing in the registry.
@@ -261,6 +308,7 @@ impl Tool {
             Tool::Iverilog => "iverilog",
             Tool::Verilator => "verilator",
             Tool::Yosys => "yosys",
+            Tool::Vivado => "vivado",
         }
     }
 
@@ -273,7 +321,22 @@ impl Tool {
             Tool::Iverilog => IVERILOG_VOCABULARY,
             Tool::Verilator => VERILATOR_VOCABULARY,
             Tool::Yosys => YOSYS_VOCABULARY,
+            Tool::Vivado => VIVADO_VOCABULARY,
         }
+    }
+
+    /// Whether the tool's faces judge only at line start.
+    ///
+    /// Vivado is the one `true` here, and it is the reason this method
+    /// exists: xsim's run faces lead their lines with the bare marker
+    /// (`Failure: the design is wrong`), and the probed negative pins --
+    /// a case drift (`FATAL:`) and a marker mid-line -- hold only if the
+    /// search anchors on the line start. Every other tool writes faces
+    /// the substring search must read wherever they land: ghdl's faces
+    /// open with the file path, yosys's syntax face carries its marker
+    /// behind the source location.
+    pub fn line_anchored(self) -> bool {
+        matches!(self, Tool::Vivado)
     }
 }
 
@@ -300,6 +363,7 @@ pub fn tools() -> &'static [Tool] {
         Tool::Iverilog,
         Tool::Verilator,
         Tool::Yosys,
+        Tool::Vivado,
     ]
 }
 
@@ -315,7 +379,23 @@ pub fn tools() -> &'static [Tool] {
 /// merely mentions "ERROR" mid-text (a filename, an echoed banner) stays
 /// clean, and an empty log is clean.
 ///
+/// The search follows the tool's own anchors: substring everywhere,
+/// except vivado, whose faces judge only where a line LEADS with the
+/// marker -- the probed negative pins (a case drift at line start, a
+/// marker mid-line) hold only line-anchored ([`Tool::line_anchored`]).
+///
 /// The search short-circuits: the first face present decides the verdict.
 pub fn judge(tool: &Tool, log: &str) -> bool {
-    tool.vocabulary().iter().all(|face| !log.contains(face))
+    tool.vocabulary()
+        .iter()
+        .all(|face| !face_present(tool, face, log))
+}
+
+/// Whether one face is present in the log, under the tool's own anchor.
+fn face_present(tool: &Tool, face: &str, log: &str) -> bool {
+    if tool.line_anchored() {
+        log.lines().any(|line| line.starts_with(face))
+    } else {
+        log.contains(face)
+    }
 }

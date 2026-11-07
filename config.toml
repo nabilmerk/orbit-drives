@@ -17,6 +17,13 @@
 #   orbit build --target ghdl-build -- --top gate
 #   orbit build --target nvc-build -- --top gate
 #   orbit build --target verilator-build -- --top gate
+#   orbit build --target yosys -- --top top
+#   orbit build --target vivado-build -- --part xc7z010clg400-1 --top top
+#
+# The vivado targets need the install path on $VIVADO_BIN (the drive
+# derives the launch recipe env -- LOCPATH / LC_ALL / LD_LIBRARY_PATH --
+# from it and its own defaults; see the README's launch-recipe section).
+# The vivado sim face consumes no --part.
 #
 # No --top is needed for the sim faces through `orbit test`: the drive
 # runs the testbench orbit exports as $ORBIT_TB_NAME (through `orbit
@@ -69,3 +76,13 @@ command = ["orbit-drives", "verilator-build"]
 name = "yosys"
 description = "Verilog/SV synthesis through yosys: one script-driven `yosys -p` per top (read every blueprint Verilog file, synth -top, write netlists/<top>.v), the log judged on yosys's probed ERROR: vocabulary AND yosys's exit -- every probed failure exits 1, so the exit convicts and the judge is the second witness. Build only: yosys has no runtime, there is no sim face"
 command = ["orbit-drives", "yosys"]
+
+[[target]]
+name = "vivado-build"
+description = "VHDL and Verilog/SV synthesis through Vivado: xvhdl compiles the VHDL in blueprint order through the deferral loop (order-sensitive within work, probed), one order-free xvlog compiles the Verilog, then per top the GENERATED synthesis script rides `vivado -mode batch -nojournal -nolog` -- one read per file, synth_design -top -part -mode out_of_context, three netlist writers into netlists/, the whole body inside one return-code catch-guard (Tcl's catch returns the writers' filename results, so an emptiness guard would false-fail a clean synth -- probed). Requires --part BEFORE any drive (exit 2 at the CLI); needs the launch recipe env, which the drive sets on every spawn (see the README)"
+command = ["orbit-drives", "vivado-build"]
+
+[[target]]
+name = "vivado"
+description = "VHDL and Verilog/SV testbenches through Vivado xsim: the same both-language compile, then xelab per top (-L work work.<top> -s <top>) and one xsim -R per snapshot, every run log gated on vivado's probed LINE-START failure vocabulary (Failure:/Error:/Fatal: at line start; case drift and mid-line markers never judge) -- xsim exits 0 on BOTH probed runtime failures (a severity failure AND a severity error), so the judge is the load-bearing gate; the sim face consumes no --part"
+command = ["orbit-drives", "vivado"]

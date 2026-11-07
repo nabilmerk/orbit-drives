@@ -90,6 +90,16 @@ Subcommands (one per orbit target entry):
   `netlists/<top>.v`), the log judged on yosys's probed `ERROR:`
   vocabulary and the exit. Build only: yosys has no runtime, there is no
   sim face and nothing runs.
+- `vivado-build` -- the vivado build face: both languages compiled
+  (xvhdl per VHDL file with the deferral loop, one order-free xvlog),
+  then per top the GENERATED synthesis script through
+  `vivado -mode batch -nojournal -nolog`, the three netlists the payload.
+  Requires `--part <part>` BEFORE any drive (exit 2 at the CLI); no
+  simulation, nothing judged.
+- `vivado` -- the vivado sim face: the same compile, then xelab per top
+  and one xsim run per snapshot, every run log gated on vivado's probed
+  LINE-START failure vocabulary AND the exit. xsim exits 0 on BOTH probed
+  runtime failures, so the judge is the load-bearing gate here.
 
 Options:
 
@@ -97,12 +107,19 @@ Options:
 - `--top <name>` -- a top unit to elaborate (and run: `ghdl`); repeatable.
   With no `--top`, the drive runs `$ORBIT_TB_NAME` (orbit exports it; empty
   in all-mode counts as absent). Exit 2 when neither names a top.
+- `--part <part>` -- the FPGA part `vivado-build` synthesizes for (e.g.
+  `xc7z010clg400-1`). REQUIRED on `vivado-build` -- the gate fires before
+  any drive, exit 2 naming the flag (the probed alternative is a ~4s
+  synth-then-fail inside the tool) -- and REJECTED on every other face
+  (loud exit-2: the sim face consumes no part, and the other tools do not
+  speak one).
 - anything else -- a tool extra, appended verbatim to the drive's LAST
-  tool argv: each `ghdl -r` / `nvc -r` / `vvp` on the sim faces, each
-  `ghdl -e` / `nvc -e` / the `iverilog` compile on the build faces
-  (there is no run to carry them, and a dropped argument would be a
-  silent degradation; an option the elaboration does not speak is the
-  tool's own loud rejection, surfaced as an exit-1 failure).
+  tool argv: each `ghdl -r` / `nvc -r` / `vvp` / `xsim` on the sim faces,
+  each `ghdl -e` / `nvc -e` / the `iverilog` compile / the `yosys -p`
+  synth / `vivado -mode batch` on the build faces (there is no run to
+  carry them, and a dropped argument would be a silent degradation; an
+  option the elaboration does not speak is the tool's own loud rejection,
+  surfaced as an exit-1 failure).
 
 Exits:
 
@@ -276,6 +293,109 @@ its exit. The shapes the probes wrote down:
   blueprint's `VHDL` entries are the loud not-carried face (exit 2),
   the same door verilator closes.
 
+## The vivado drives
+
+Two target entries (`vivado`, `vivado-build`) share one drive on the
+richest probed process in this crate. The shapes the probes wrote down:
+
+### The launch recipe
+
+Every vivado-family spawn needs the recipe env, and the drive sets all
+three legs on every spawn itself (`Command::env`, scoped to the spawn --
+a process-wide `LD_LIBRARY_PATH` poisons other tools' backends, probed in
+the hdlm project):
+
+- **`LC_ALL`** -- the launcher aborts without a UTF-8 locale it can name.
+  The environment's own `LC_ALL` wins; the probed `en_US.UTF-8` default
+  rides otherwise.
+- **`LOCPATH`** -- where that locale lives when it is not
+  system-installed. The environment's own wins; `$HOME/.local/locale`
+  (the no-root `localedef` recipe) otherwise. Omitted when neither
+  exists.
+- **`LD_LIBRARY_PATH`** -- the SuSE ncurses5 leg the main wrapper's full
+  init needs. The environment's own wins; the leg derived from the
+  resolved install (`<prefix>/lib/lnx64.o/SuSE`) otherwise. Omitted when
+  neither exists.
+
+The binaries resolve from `VIVADO_BIN` (the install path, e.g.
+`/opt/2025.2.1/Vivado/bin/vivado`); the stage binaries (xvhdl, xvlog,
+xelab, xsim) ride beside it as siblings of the resolved path, and a bare
+PATH name falls back to the PATH lookup for the whole family. Every
+family binary answers `-version` (single dash) with exit 0 -- the
+spawnability probe.
+
+### The compile
+
+- **Both languages ride.** vivado is the one carried tool that speaks
+  both: `VHDL` entries compile through xvhdl, `VLOG` and `SYSV` entries
+  through xvlog, a custom fileset is the loud not-carried face (exit 2).
+- **xvhdl is order-sensitive within the work library**
+  (`ERROR: [VRFC 10-2987] 'top' is not compiled in library 'work'`,
+  exit 1, probed live on 2025.2.1), so the VHDL files compile ONE
+  INVOCATION PER FILE in blueprint order through the deferral loop (the
+  ghdl-precedent machinery, borrowed a third time): a failing file
+  defers to a retry after the others; a pass that makes no progress
+  stops the loop with every residual log relayed.
+- **xvlog is order-free** (a consumer-before-provider pair compiled
+  clean, probed live), so the Verilog files compile in ONE invocation.
+- **No std flag is pinned.** The tool default compiles GRLIB-scale
+  designs green; `--2008` breaks them (the `10-3083` homograph walls,
+  probed in the hdlm project). The default is the design, not an
+  oversight.
+- **The compile gates on the exit and is never judged.** Every probed
+  compile failure exits 1, and the faces are UPPERCASE `ERROR:` on
+  STDOUT -- stderr is empty on every stage-binary drive, error or clean
+  (probed) -- deliberately outside the vocabulary below: case-exactness
+  keeps the compile faces out of the judge, and the honest exit makes
+  them unnecessary there.
+
+### The build face (`vivado-build`)
+
+- **`--part` is required BEFORE any drive** (exit 2 at the CLI naming
+  the flag): the probed alternative is a ~4s synth-then-fail inside the
+  tool. The sim face consumes no part -- the flag on any other face is a
+  loud parse error, never a dropped argument.
+- **The synthesis script is GENERATED** per top, written to
+  `orbit-synth-<top>.tcl`: one `read_vhdl` / `read_verilog` per file
+  (the batch `read_*` commands take one file per command, and read
+  order is irrelevant -- probed on 2025.2.1), then `synth_design -top
+  <top> -part <part> -mode out_of_context`, then the three netlist
+  writers into `netlists/` (`write_checkpoint -force` .dcp,
+  `write_verilog -force` .v, `write_edif -force` .edf).
+- **The catch-guard is the probed trap.** The whole body sits inside ONE
+  guard that exits 1 -- and the guard tests `catch`'s RETURN CODE, never
+  the caught string: Tcl's `catch {script} var` writes the script's
+  NORMAL RETURN VALUE into `var`, and the netlist writers return the
+  written filename, so an emptiness guard FALSE-FAILS A CLEAN SYNTH
+  (probed live: exit 1 with all three netlists written). The guard also
+  makes the batch fail-fast -- unguarded batch mode continues past a
+  failed `synth_design` (probed on 2025.2.1), and a guardless catch
+  would write nothing after the failure.
+- **The batch exit is honest.** Exit 0 clean with the payload landed,
+  exit 1 fail-fast through the guard. The drive never judges the batch
+  log.
+
+### The sim face (`vivado`)
+
+- **xelab pins the library and names the top**
+  (`xelab -L work work.<top> -s <top>`); the snapshot lands as
+  `xsim.dir/<top>` and the elaboration validates the top (an unknown top
+  answers `ERROR: [XSIM 43-3225] Cannot find design unit ...`, exit 1,
+  probed).
+- **xsim runs each snapshot once** (`xsim <top> -R`), and THE RUN EXIT
+  IS A LIE: xsim exits 0 on a violated `assert ... severity failure`
+  AND on a violated `severity error` (both probed live -- the face
+  prints, the simulation continues or stops, and the process exits 0).
+  The log is the only truth, and the judge is the load-bearing gate --
+  the only drive in this crate where the exit cannot convict a probed
+  failure. The exit stays the crash-door witness: a missing snapshot
+  exits 1 with an uppercase face the vocabulary does not carry.
+- **The vocabulary is line-anchored, the only one in this crate.** The
+  faces are `Fatal:` / `Error:` / `Failure:` at LINE START, case-exact:
+  a case drift (`FATAL:`) and a marker mid-line (a testbench's own
+  report note, an echoed source line) never judge. `Warning:` and
+  `Note:` lines never judge.
+
 ## The probed facts
 
 Every pattern in a vocabulary and every drive fact below was probed live
@@ -384,15 +504,46 @@ syntax face; a lowercase drift (`error:`) is not one of its faces and
 never judges a log. The log rides stdout and the failure faces stderr;
 the drive joins the streams, so the face reads either way.
 
+### vivado 2025.2.1
+
+| face / fact | argv that wrote it | what the tool did |
+|------|-----|------|
+| `Failure: the design is wrong` (+ the `Time: ... File: ...` line, on stdout) | `xvhdl -work work tb_fatal.vhd && xelab -L work work.tb_fatal -s sim_fail && xsim sim_fail -R` (same through the drive) | a violated `assert ... severity failure` stops the check -- and **xsim EXITS 0**: the run exit is a lie, the line-start face is the only witness |
+| `Error: check failed` (+ the continuation `Note:` line, on stdout) | `xsim sim_err -R` on a `severity error` assert | the face prints, the simulation **continues** (`Note: continued past the error` follows), and **xsim still exits 0** -- the same lie; the face convicts |
+| `Note: sim done`, the kernel `INFO:` lines | `xsim sim_clean -R` on a passing testbench | the clean run exits 0 -- continuations, **never judged** |
+| `ERROR: [VRFC 10-4982] syntax error near 'end' [...:9]` (+ `ERROR: [VRFC 10-2989]`, then the `10-8704` ignored line, on **stdout**) | `xvhdl -work work broken.vhd` (same through the drive, which joins the streams) | the compile-error face, **exit 1**; stderr is EMPTY on every stage-binary drive, error or clean; the compile gates on the exit and is never judged -- the uppercase face is deliberately outside the mixed-case vocabulary |
+| `ERROR: [VRFC 10-2987] 'top' is not compiled in library 'work'` | `xvhdl -work work tb_clean.vhd top.vhd gate.vhd` (consumer before provider) | **order-sensitive within work**, exit 1 -- the deferral loop's reason to exist here; even the tb-gate-top order fails (`gate` before `top` is required) |
+| `INFO: [VRFC 10-2263] Analyzing Verilog file ...` , exit 0 | `xvlog vtop.v vgate.v` (consumer before provider) | **order-free** -- xvlog compiles in one invocation, no deferral loop; `-work work` pins the library |
+| `ERROR: [XSIM 43-3225] Cannot find design unit work.tb_nosuch in library work located at xsim.dir/work.` | `xelab -L work work.tb_nosuch -s sim_nosuch` | the elaboration refusal of an unknown top, **exit 1** -- honest, the elaboration gates on the exit |
+| `ERROR: Please check the snapshot name ... does not exist` | `xsim nosuch_snap -R` | the missing-snapshot face, **exit 1** -- the crash door; uppercase, outside the vocabulary, the exit convicts |
+| `SYNTH FAILED: ERROR: [Common 17-69] Command failed: Vivado Synthesis failed`, **exit 1** | `vivado -mode batch -nojournal -nolog -source synth.tcl` with a syntax-broken `read_vhdl` inside the catch-guard | the fail-fast batch face: the return-code catch-guard stops the script and exits 1 (unguarded batch **continues past a failed synth_design**, probed) |
+| **exit 1 with all three netlists written** | the same script whose guard tested `$synth_err` emptiness instead of catch's return code | **the probed Tcl trap**: `catch {script} var` writes the script's NORMAL RETURN VALUE into `var`, and `write_verilog`/`write_checkpoint` return the written filename -- an emptiness guard false-fails a CLEAN synth |
+| exit 0, `netlists/top.dcp` + `top.v` + `top.edf` written | `vivado -mode batch -nojournal -nolog -source synth.tcl`, guard on catch's return code, `synth_design -top top -part xc7z010clg400-1 -mode out_of_context` | the clean synth face; the echo of the sourced commands rides stdout, the synth errors ride **stderr**, exit honest |
+| `-version` exits 0 on every family binary | `vivado -version`, `xvhdl -version`, `xvlog -version`, `xelab -version`, `xsim -version` | the identity face (single dash), the drive's spawnability probe |
+
+vivado's run vocabulary is line-start mixed-case and case-exact: an
+uppercase drift (`FATAL:`, `ERROR:`) is not one of xsim's run faces and
+never judges a log -- and the uppercase `ERROR:` faces of the compile and
+elaboration stages are deliberately outside the vocabulary, because those
+stages gate on their honest exits. A testbench's own report note that
+LEADS its line with a face shape (`Failure: retrying`) convicts the run;
+mid-line prose never does. The recipe env (above) rides every spawn, set
+by the drive; `.Xil/` and the stage logs (`xvhdl.log`, `xvlog.log`,
+`xsim.log`, `xsim.jou`) land in the working directory and are the tools'
+own scratch.
+
 ## Honest limits
 
 - **The filesets are per tool.** The VHDL drives (`ghdl`, `nvc`) carry
   the `VHDL` fileset only; the Verilog drives (`iverilog`, `verilator`,
   `yosys`) carry `VLOG` and `SYSV` (their native filesets) and reject
   `VHDL` and custom filesets with a loud exit-2 ("not yet carried"),
-  never a silent skip. Mixed-language designs stay out of the contract.
-- **Five tool names, five vocabularies: ghdl, nvc, iverilog, verilator,
-  yosys.** Any other tool name is a loud error at the CLI, never a guess.
+  never a silent skip. The vivado drives carry all three (`VHDL` +
+  `VLOG` + `SYSV`) and reject only custom filesets -- vivado is the one
+  carried tool that speaks both languages.
+- **Six tool names, six vocabularies: ghdl, nvc, iverilog, verilator,
+  yosys, vivado.** Any other tool name is a loud error at the CLI, never
+  a guess.
 - **The library column is carried, not mapped.** Every file analyzes
   into the tool's `work` library (ghdl's `work-obj08.cf` clock, nvc's
   `work/` directory), compiles into iverilog's one snapshot, or lints
@@ -408,29 +559,41 @@ the drive joins the streams, so the face reads either way.
   argv on the build faces).
 - **The state is run-scoped, not incremental.** Every drive wipes its
   clock first (the work libraries; iverilog's snapshot; verilator's
-  `obj_dir`). A large design pays a full re-analysis per drive;
-  correctness before incrementality is the v1 stance. (Probed honestly:
-  ghdl's wipe is load-bearing -- a stale library obsoletes its own
-  design; nvc tolerates the stale library, iverilog's snapshot cannot be
-  run past a failed compile, and verilator's `--build` regenerates its
-  intermediates, so those wipes are symmetry.)
-- **Bare ghdl and bare vvp have holes; the shipped paths catch them.**
-  A `report ... severity error` statement slips a bare `ghdl -r` (face
-  `(report error)`, exit 0, no judged face): the drive pins
-  `--assert-level=error`, which stops the run and writes the
+  `obj_dir`; yosys's `netlists/`; vivado's `xsim.dir/` and, on the build
+  face, its `netlists/`). A large design pays a full re-analysis per
+  drive; correctness before incrementality is the v1 stance. (Probed
+  honestly: ghdl's wipe is load-bearing -- a stale library obsoletes its
+  own design; nvc tolerates the stale library, iverilog's snapshot
+  cannot be run past a failed compile, verilator's `--build` regenerates
+  its intermediates, a failed yosys synth exits before its netlist could
+  be mistaken for fresh, and a failed vivado compile or elaboration
+  exits before the sim face could run a stale snapshot -- so those wipes
+  are symmetry.)
+- **Bare ghdl and bare vvp have holes; bare xsim is worse; the shipped
+  paths catch them.** A `report ... severity error` statement slips a
+  bare `ghdl -r` (face `(report error)`, exit 0, no judged face): the
+  drive pins `--assert-level=error`, which stops the run and writes the
   `./<top>:error: report failed` face. A `$error` call slips a bare vvp
   (face `ERROR: ...`, simulation continued, **exit 0**): there the
-  judge's face gate is the only witness, and it is load-bearing. nvc and
-  verilator have no such hole probed: nvc's severity-error runs continue
-  the simulation but still exit 1, and every verilator model failure
-  dies by SIGABRT -- no exit code at all -- so the exit convicts.
-- **A face shape mid-text judges fail.** The vocabularies are case-exact
-  substrings and cannot tell your prose from the tool's: a testbench's
-  own report note that embeds a ghdl face shape (`bus:error: retrying`),
-  an nvc face shape (`** Error: retrying`), a vvp face shape
-  (`ERROR: retrying`), or a verilator face shape (`%Error: retrying`)
-  convicts the run. Keep report notes and `$display` text free of face
-  shapes.
+  judge's face gate is the only witness, and it is load-bearing. xsim is
+  the extreme -- BOTH probed runtime failures exit 0 (a severity failure
+  and a severity error) -- so the vivado drive's judge is the
+  load-bearing gate on every run, and the line-start vocabulary is the
+  only witness on them. nvc, verilator, and yosys have no such hole
+  probed: nvc's severity-error runs continue the simulation but still
+  exit 1, every verilator model failure dies by SIGABRT -- no exit code
+  at all -- and every probed yosys failure exits 1, so their exits
+  convict.
+- **A face shape mid-text judges fail -- except on vivado.** The
+  substring vocabularies cannot tell your prose from the tool's: a
+  testbench's own report note that embeds a ghdl face shape
+  (`bus:error: retrying`), an nvc face shape (`** Error: retrying`), a
+  vvp face shape (`ERROR: retrying`), a verilator face shape
+  (`%Error: retrying`), or a yosys face shape (`ERROR: retrying`)
+  convicts the run. vivado is the deliberate exception: its faces are
+  line-anchored, so only a line LEADING with the marker convicts and
+  mid-text prose never does. Keep report notes and `$display` text free
+  of face shapes anyway.
 - **Verilator builds need a C++ toolchain.** `--binary --build` shells
   out to `make` and the system C++ compiler (probed on this box with
   both on PATH); a box without them fails the build step loudly,
@@ -438,8 +601,20 @@ the drive joins the streams, so the face reads either way.
   relayed.
 - **The run log is captured, then relayed**, not streamed; a long
   simulation's output appears when the run ends.
-- **The tools resolve on PATH.** The orbit target contract carries no
-  binary-path field, so the drives pin no path.
+- **The tools resolve on PATH, vivado from its env hook.** The orbit
+  target contract carries no binary-path field: every drive but vivado
+  pins the bare name; vivado resolves from `$VIVADO_BIN` (the install
+  path) with the bare name on PATH as the fallback, and its stage
+  binaries ride beside the resolved path (or on PATH). The vivado recipe
+  env rides the drive's own spawn scoping -- see the launch recipe.
+- **Blueprint paths with spaces are a v1 limit on the script faces.**
+  yosys's `-p` script and vivado's generated synth script carry the file
+  paths verbatim, split on whitespace by the tool's own parser: a path
+  with a space would split and fail the read loudly.
+- **The run log is captured, then relayed**, not streamed; a long
+  simulation's output appears when the run ends. (yosys's synthesis log
+  relays only on failure -- on success the drive reports the netlist,
+  not kilobytes of synthesis log.)
 - **License.** The Cargo.toml declares `MIT OR Apache-2.0`; the license
   texts are held until the maintainer conversation. Orbit itself is
   GPL-3 -- irrelevant here: a target is a spawned process, not a derived
@@ -450,12 +625,13 @@ the drive joins the streams, so the face reads either way.
 ```sh
 cargo test            # the contract, drive, and argv suites
 cargo test -- --ignored   # + the real-spawn tests: the real binary, real
-                          # ghdl, nvc, iverilog, verilator, and yosys, the
-                          # real orbit spawn shape, order-dependent
-                          # blueprints through the deferral loop, judged
-                          # severity failures and $fatal/$error calls,
-                          # twice in one output directory, and the build
-                          # faces
+                          # ghdl, nvc, iverilog, verilator, yosys, and
+                          # vivado, the real orbit spawn shape,
+                          # order-dependent blueprints through the
+                          # deferral loop, judged severity failures and
+                          # $fatal/$error calls, twice in one output
+                          # directory, the build faces, and the vivado
+                          # lying-exit gate
 ```
 
 The contract suite (`tests/contracts.rs`) ports the aquila contract tests
@@ -463,10 +639,13 @@ fixture-for-fixture (upstream: `github.com/chaseruskin/aquila`,
 `tests/test_contracts.py`) and extends them with the probed faces of the
 other tools: the real failing logs judge fail; the clean logs (including
 the one mentioning "ERROR" mid-text) judge pass; the uppercase (ghdl) and
-lowercase (nvc, vvp, verilator) drifts never judge; the severity-error,
-`$error`, and model-abort faces judge fail; the warning/note faces stay
-clean; and the registry pins exactly the carried tools. The drive suites
-pin the deferral loop (a consumer-before-provider pair must retry), the
-no-progress stop, the TSV blueprint parse, the crash door (a clean log
-does not green-light a nonzero exit), and the judge gate on fake
-severity-error logs for the VHDL tools.
+lowercase (nvc, vvp, verilator, yosys) drifts never judge; vivado's pins
+run both ways -- its faces judge at line start only, and a case drift or
+a marker mid-line never judges; the severity-error, `$error`,
+model-abort, and lying-xsim-exit faces judge fail; the warning/note
+faces stay clean; and the registry pins exactly the carried tools. The
+drive suites pin the deferral loop (a consumer-before-provider pair must
+retry), the no-progress stop, the TSV blueprint parse, the crash door (a
+clean log does not green-light a nonzero exit), the Tcl catch-guard
+shape, and the judge gate on fake severity-error logs for the VHDL
+tools.

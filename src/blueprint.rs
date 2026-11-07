@@ -154,6 +154,11 @@ pub struct Drive {
     /// the user's extras with the `--` separator stripped, and the argv
     /// parser passes through every token the drive does not own.
     pub extra: Vec<String>,
+    /// The FPGA part the vivado build face synthesizes for (`--part`,
+    /// e.g. `xc7z010clg400-1`). Only the vivado build face reads it --
+    /// the argv parser rejects the flag on every other face, so every
+    /// other drive sees `None` here.
+    pub part: Option<String>,
 }
 
 /// The note for a blueprint plan the drive does not carry: orbit exports
@@ -242,6 +247,44 @@ pub fn verilog_only(entries: &[Entry]) -> Result<Vec<PathBuf>, crate::iverilog::
     }
 }
 
+/// The VHDL and Verilog files of the blueprint, in blueprint order: the
+/// pair the vivado drives compile -- VHDL entries through xvhdl, `VLOG`
+/// and `SYSV` entries through xvlog.
+///
+/// Vivado is the one carried tool that speaks both languages, so this is
+/// the only filter that carries two fileset families. Every OTHER entry
+/// -- a custom fileset -- is rejected loudly: a silent skip would leave
+/// files the user believes were compiled.
+///
+/// The error type is [`crate::vivado::NotCarried`] -- its message names
+/// the three carried filesets, not one face, because both vivado faces
+/// carry it.
+pub fn vivado_files(
+    entries: &[Entry],
+) -> Result<(Vec<PathBuf>, Vec<PathBuf>), crate::vivado::NotCarried> {
+    let foreign: Vec<Entry> = entries
+        .iter()
+        .filter(|entry| {
+            entry.fileset != "VHDL" && entry.fileset != "VLOG" && entry.fileset != "SYSV"
+        })
+        .cloned()
+        .collect();
+    if foreign.is_empty() {
+        let mut vhdl = Vec::new();
+        let mut verilog = Vec::new();
+        for entry in entries {
+            if entry.fileset == "VHDL" {
+                vhdl.push(entry.path.clone());
+            } else {
+                verilog.push(entry.path.clone());
+            }
+        }
+        Ok((vhdl, verilog))
+    } else {
+        Err(crate::vivado::NotCarried { entries: foreign })
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -305,5 +348,31 @@ mod tests {
         let err = verilog_only(&parse_blueprint("VHDL\twork\t./a.vhd\n").unwrap()).unwrap_err();
         assert_eq!(err.entries.len(), 1);
         assert_eq!(err.entries[0].fileset, "VHDL");
+    }
+
+    #[test]
+    fn the_vivado_drives_carry_both_languages_and_name_the_rest() {
+        // Vivado speaks VHDL and Verilog: the one filter that carries two
+        // fileset families, each file split to its own compile.
+        let entries = parse_blueprint(
+            "VLOG\twork\t./b.v\nVHDL\twork\t./a.vhd\nSYSV\twork\t./c.sv\nVHDL\twork\t./d.vhd\n",
+        )
+        .unwrap();
+        let (vhdl, verilog) = vivado_files(&entries).unwrap();
+        assert_eq!(
+            vhdl,
+            vec![PathBuf::from("./a.vhd"), PathBuf::from("./d.vhd")]
+        );
+        assert_eq!(
+            verilog,
+            vec![PathBuf::from("./b.v"), PathBuf::from("./c.sv")]
+        );
+        // A custom fileset is the loud not-carried face, in blueprint
+        // order.
+        let err =
+            vivado_files(&parse_blueprint("VHDL\twork\t./a.vhd\nMYSET\twork\t./x.v\n").unwrap())
+                .unwrap_err();
+        assert_eq!(err.entries.len(), 1);
+        assert_eq!(err.entries[0].fileset, "MYSET");
     }
 }
