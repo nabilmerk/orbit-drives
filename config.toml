@@ -1,0 +1,14 @@
+# The orbit-contracts target fragment. Include it into an orbit project
+# configuration to add the ghdl target:
+#
+#   orbit config --push include=/path/to/orbit-contracts/config.toml
+#
+# The `orbit-contracts` binary must be on PATH (`cargo install --path .`).
+# Run it through orbit:
+#
+#   orbit test --target ghdl -- -gWIDTH=8 --vcd=waves.vcd
+
+[[target]]
+name = "ghdl"
+description = "VHDL testbenches through ghdl: blueprint-order analysis with the deferral loop, each run log gated on ghdl's probed failure vocabulary"
+command = ["orbit-contracts", "ghdl"]

@@ -1,0 +1,6 @@
+[package]
+name = "orbit-contracts"
+version = "0.1.0"
+edition = "2021"
+description = "Probed failure vocabularies and honest-exit targets for the orbit HDL package manager"
+license = "MIT OR Apache-2.0"
