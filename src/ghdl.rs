@@ -585,8 +585,9 @@ begin
 end rtl;
 ";
 
-    // The controller-probed severity-error fixture (ghdl 6.0.0): the face
-    // lands and ghdl exits 0 anyway. Byte-for-byte as recorded.
+    // The probed severity-error fixture (ghdl 6.0.0, 2026-11-07): bare
+    // ghdl prints the face and exits 0 anyway. Byte-for-byte as recorded
+    // in the aquila contract suite (github.com/chaseruskin/aquila).
     const SEVERITY_ERROR_LOG: &str = "\
 tb_err.vhd:8:5:@0ms:(assertion error): check failed
 tb_err.vhd:9:5:@0ms:(report note): simulation continued

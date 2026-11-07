@@ -1,9 +1,9 @@
 //! The probed ghdl vocabulary, ported from the aquila contract suite
-//! (`tests/test_contracts.py`): the fixture logs are the live runs,
-//! byte-for-byte, and the judgments are the contract. The retired Python
-//! gate counted `error):` and `ERROR` substrings, matched nothing ghdl
-//! writes, and false-failed clean logs that merely mentioned "ERROR";
-//! these pins hold that door shut.
+//! (upstream: `github.com/chaseruskin/aquila`, `tests/test_contracts.py`):
+//! the fixture logs are the live runs, byte-for-byte, and the judgments
+//! are the contract. The retired Python gate counted `error):` and `ERROR`
+//! substrings, matched nothing ghdl writes, and false-failed clean logs
+//! that merely mentioned "ERROR"; these pins hold that door shut.
 
 use std::str::FromStr;
 

@@ -35,10 +35,11 @@ use std::str::FromStr;
 pub const GHDL_VOCABULARY: &[&str] = &[
     // `./tb_fail:error: assertion failed` and `./tb_fail:error: simulation
     // failed` -- the run-level faces ghdl prints when a violated assertion
-    // stops the simulation (exit 1). Also catches the report-shaped stop
-    // (`./tb_fail:error: report failed`), probed on the same ghdl: a
-    // statically-false `assert false report ... severity failure` renders
-    // as a report face but exits 1 through this run-level line.
+    // stops the simulation (exit 1). Also catches the report-statement
+    // stop (`./tb_fail:error: report failed`), probed on the same ghdl: a
+    // `report ... severity failure` statement stops the run through this
+    // run-level line, and so does a `report ... severity error` statement
+    // once the drive pins `--assert-level=error` onto the run argv.
     ":error:",
     // `tb_fail.vhd:9:5:@1ns:(assertion failure): the design is wrong` --
     // the point-of-failure face of a violated `severity failure` assert.

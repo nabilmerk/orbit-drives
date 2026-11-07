@@ -7,8 +7,11 @@
 # Run it through orbit:
 #
 #   orbit test --target ghdl -- -gWIDTH=8 --vcd=waves.vcd
+#
+# No --top is needed: the drive runs the testbench orbit exports as
+# $ORBIT_TB_NAME. Everything after orbit's `--` rides the ghdl -r argv.
 
 [[target]]
 name = "ghdl"
-description = "VHDL testbenches through ghdl: blueprint-order analysis with the deferral loop, each run log gated on ghdl's probed failure vocabulary"
+description = "VHDL testbenches through ghdl: blueprint-order analysis with the deferral loop, each run gated on ghdl's probed failure vocabulary and the honest exit"
 command = ["orbit-contracts", "ghdl"]
