@@ -46,24 +46,42 @@ verbatim.
 ## Usage
 
 ```
-orbit-contracts ghdl --blueprint <path> --top <name> [extra ghdl args...]
+orbit-contracts <SUBCOMMAND> --blueprint <path> --top <name> [extra tool args...]
 ```
 
+Subcommands (one per orbit target entry):
+
+- `ghdl` -- the sim face: analyze, elaborate, run, judge.
+- `ghdl-build` -- the build face: analyze, elaborate, exit honest. No
+  simulation, no run log, nothing judged: `ghdl -a` and `ghdl -e` exit
+  nonzero on a broken design (probed live), so the exit is the only
+  witness a build needs.
+
+Options:
+
 - `--blueprint <path>` -- the TSV blueprint; defaults to `$ORBIT_BLUEPRINT`.
-- `--top <name>` -- a top unit to elaborate and run; repeatable. With no
-  `--top`, the drive runs `$ORBIT_TB_NAME` (orbit exports it; empty in
-  all-mode counts as absent). Exit 2 when neither names a top.
-- anything else -- a ghdl run extra, appended verbatim to each `ghdl -r`.
+- `--top <name>` -- a top unit to elaborate (and run: `ghdl`); repeatable.
+  With no `--top`, the drive runs `$ORBIT_TB_NAME` (orbit exports it; empty
+  in all-mode counts as absent). Exit 2 when neither names a top.
+- anything else -- a tool extra, appended verbatim to the drive's LAST
+  tool argv: each `ghdl -r` on the sim face, each `ghdl -e` on the build
+  face (there is no run to carry them, and a dropped argument would be a
+  silent degradation; an option the elaboration does not speak is ghdl's
+  own loud rejection, surfaced as an exit-1 elaborate failure).
 
 Exits:
 
 | code | meaning |
 |------|---------|
-| 0 | clean -- every run judged clean and exited zero |
+| 0 | clean -- every run judged clean and exited zero, or every top elaborated clean |
 | 1 | findings -- a log carried a failure face, a run exited nonzero, or ghdl reported a broken design |
 | 2 | usage -- bad argv, no top to run, unreadable blueprint, a fileset the drive does not carry |
 
 ## The ghdl drive
+
+Two target entries (`ghdl`, `ghdl-build`) share one drive, split by how
+far it goes: the build face stops after step 4, the sim face runs on
+through the judge.
 
 1. Read the blueprint; every non-VHDL entry (`VLOG`, `SYSV`, a custom
    fileset) is a loud exit-2, never a silent skip.
@@ -76,11 +94,14 @@ Exits:
    ghdl is order-sensitive, so a failing analyze defers its file to a retry
    after the others; a pass that makes no progress stops the loop with
    every residual stderr surfaced verbatim.
-4. Elaborate and run each top (`ghdl -r --std=08 <top>
+4. Elaborate each top (`ghdl -e --std=08 <top> <extras>` on the build
+   face; the extras ride the elab argv there because there is no run to
+   carry them). A nonzero elaboration is a finding, exit 1.
+5. (`ghdl` only) Run each top (`ghdl -r --std=08 <top>
    --assert-level=error <extra args>`; the assert level is a simulation
    option, legal only after the toplevel unit) and capture the log.
-5. Gate the run: a probed failure face in the log OR a nonzero ghdl exit
-   is a finding. Either witness convicts.
+6. (`ghdl` only) Gate the run: a probed failure face in the log OR a
+   nonzero ghdl exit is a finding. Either witness convicts.
 
 ## The probed facts
 
@@ -121,7 +142,8 @@ nothing ghdl writes, and false-failed clean logs.
   ghdl's `work` library; a multi-library orbit project is out of scope for
   v1.
 - **`--std=08` is pinned** and cannot be overridden from the argv yet; the
-  extras reach only the `ghdl -r` step.
+  extras reach the drive's last step only (`ghdl -r` on the sim face,
+  `ghdl -e` on the build face).
 - **The state is run-scoped, not incremental.** Every drive wipes
   `work-obj08.cf` first. A large design pays a full re-analysis per drive;
   correctness before incrementality is the v1 stance.

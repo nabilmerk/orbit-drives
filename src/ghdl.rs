@@ -1,13 +1,18 @@
 //! The ghdl target drive: the orbit blueprint in, a judged verdict out.
 //!
-//! The drive reads the blueprint orbit wrote for the target (the TSV plan:
-//! one `fileset<TAB>library<TAB>filepath` line per collected file),
-//! analyzes the VHDL entries in blueprint order with the deferral loop,
-//! elaborates and runs every requested top, and judges each run log
-//! against ghdl's probed failure vocabulary. The judge -- not ghdl's exit
-//! code -- is the gate: ghdl's exit is honest for a `severity failure`
-//! stop but lies for a violated `severity error` check (exit 0), and the
-//! face in the log is the only witness.
+//! Two orbit targets share this drive, split by [`Mode`]: `ghdl-build`
+//! (analyze + elaborate per top, exit honest, no simulation, nothing
+//! judged) and `ghdl` (the same drive run to the end: elaborate, run,
+//! judge). The drive reads the blueprint orbit wrote for the target (the
+//! TSV plan: one `fileset<TAB>library<TAB>filepath` line per collected
+//! file), analyzes the VHDL entries in blueprint order with the deferral
+//! loop, and elaborates every requested top; the sim face then runs each
+//! top and judges the run log against ghdl's probed failure vocabulary.
+//! The judge -- not ghdl's exit code -- is the sim face's gate: ghdl's
+//! exit is honest for a `severity failure` stop but lies for a violated
+//! `severity error` check (exit 0), and the face in the log is the only
+//! witness. The build face needs no judge: `ghdl -a` and `ghdl -e` exit
+//! nonzero on a broken design (probed live), so the exit is honest there.
 
 use std::fmt;
 use std::fs;
@@ -32,6 +37,33 @@ pub const STD: &str = "--std=08";
 /// defense in depth only: the judge stays the gate, because the face must
 /// land in the log either way.
 pub const ASSERT_LEVEL: &str = "--assert-level=error";
+
+/// What the drive runs: one orbit target per variant, both faces of the
+/// same tool sharing one drive.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum Mode {
+    /// The `ghdl-build` target: analyze the blueprint in order, elaborate
+    /// each top, exit honest. NO simulation: there is no run, no run log,
+    /// and nothing judged. `ghdl -a` and `ghdl -e` need no log gate (both
+    /// exit nonzero on a broken design, probed live on ghdl 6.0.0), so on
+    /// this face the exit is the only witness -- the judge exists for the
+    /// sim face, whose exit lies.
+    Build,
+    /// The `ghdl` target: elaborate and run each top, gating every run log
+    /// on the probed vocabulary AND the exit. Either witness convicts.
+    Sim,
+}
+
+impl Mode {
+    /// The word the drive stamps into its progress lines, so an orbit log
+    /// says which face ran.
+    fn label(self) -> &'static str {
+        match self {
+            Mode::Build => "build",
+            Mode::Sim => "sim",
+        }
+    }
+}
 
 /// The work library file ghdl writes into the working directory for
 /// `--std=08` (ghdl names it after the standard: `-obj08`). It is ghdl's
@@ -367,16 +399,19 @@ fn plan_note(plan: Option<&str>) -> Option<String> {
     }
 }
 
-/// Drive the ghdl target end to end: blueprint, analyze, elaborate, run,
-/// judge.
+/// Drive the ghdl target end to end: blueprint, analyze, elaborate, and
+/// -- on the sim face -- run and judge.
 ///
 /// Orbit spawns this process with the working directory set to the
 /// target's output directory, so the blueprint's relative paths and
 /// ghdl's library files land there.
 ///
 /// All progress and diagnostics are printed here; the returned error only
-/// picks the exit code.
-pub fn drive(request: &Drive) -> Result<(), DriveError> {
+/// picks the exit code. The mode picks how far the drive goes: `Build`
+/// stops after the elaborations (no run, no log, nothing judged); `Sim`
+/// runs each elaborated top and judges it.
+pub fn drive(request: &Drive, mode: Mode) -> Result<(), DriveError> {
+    let label = mode.label();
     // ghdl must be spawnable before anything else, so a missing binary is
     // a loud usage error instead of a deferral-loop residual.
     capture(Command::new(GHDL_BIN).arg("--version")).map_err(DriveError::Spawn)?;
@@ -415,12 +450,12 @@ pub fn drive(request: &Drive) -> Result<(), DriveError> {
     })?;
 
     println!(
-        "orbit-contracts: ghdl: analyzing {} VHDL file(s) in blueprint order",
+        "orbit-contracts: ghdl: {label}: analyzing {} VHDL file(s) in blueprint order",
         files.len()
     );
     let report = analyze_with_deferral(&files, analyze_once);
     println!(
-        "orbit-contracts: ghdl: {} file(s) analyzed in {} pass(es)",
+        "orbit-contracts: ghdl: {label}: {} file(s) analyzed in {} pass(es)",
         report.analyzed.len(),
         report.passes
     );
@@ -442,9 +477,18 @@ pub fn drive(request: &Drive) -> Result<(), DriveError> {
 
     let mut findings = Vec::new();
     for top in &request.tops {
-        println!("orbit-contracts: ghdl: elaborating {top}");
+        println!("orbit-contracts: ghdl: {label}: elaborating {top}");
         let mut elaborate = Command::new(GHDL_BIN);
         elaborate.args(["-e", STD]).arg(top);
+        // The extras ride the drive's last step verbatim: the run argv on
+        // the sim face, the elaboration argv on the build face (there is
+        // no run to carry them, and silently dropping a user argument
+        // would be a degradation). An option the elaboration does not
+        // speak is ghdl's own loud rejection, surfaced as an exit-1
+        // elaborate failure.
+        if mode == Mode::Build {
+            elaborate.args(&request.extra);
+        }
         let output = capture(&mut elaborate).map_err(DriveError::Spawn)?;
         if !output.status.success() {
             let stderr = lossy(&output.stderr);
@@ -456,45 +500,25 @@ pub fn drive(request: &Drive) -> Result<(), DriveError> {
             });
         }
 
-        println!("orbit-contracts: ghdl: running {top}");
-        // `--assert-level=error` rides AFTER the top unit: it is a
-        // simulation option, and ghdl rejects it anywhere earlier.
-        let mut run = Command::new(GHDL_BIN);
-        run.args(["-r", STD])
-            .arg(top)
-            .arg(ASSERT_LEVEL)
-            .args(&request.extra);
-        let output = capture(&mut run).map_err(DriveError::Spawn)?;
-        // The log is both streams joined on their boundary; an empty side
-        // contributes no line, so a quiet run relays no stray blank line.
-        let stdout = lossy(&output.stdout);
-        let stderr = lossy(&output.stderr);
-        let log = match (stdout.is_empty(), stderr.is_empty()) {
-            (true, true) => String::new(),
-            (true, false) => stderr,
-            (false, true) => stdout,
-            (false, false) => format!("{stdout}\n{stderr}"),
-        };
-        print_block(&log);
-
-        let outcome = RunOutcome {
-            top: top.clone(),
-            exit: output.status.code().unwrap_or(-1),
-            log,
-        };
-        if outcome.clean() {
-            println!("orbit-contracts: ghdl: {top}: pass");
-        } else if outcome.has_face() {
-            println!(
-                "orbit-contracts: ghdl: {top}: fail (the log carries a probed ghdl failure face)"
-            );
-            findings.push(outcome);
-        } else {
-            println!(
-                "orbit-contracts: ghdl: {top}: fail (ghdl exited {} without a judged face)",
-                outcome.exit
-            );
-            findings.push(outcome);
+        match mode {
+            Mode::Build => println!("orbit-contracts: ghdl: {label}: {top}: elaborated"),
+            Mode::Sim => {
+                let outcome = run_top(top, &request.extra, label)?;
+                if outcome.clean() {
+                    println!("orbit-contracts: ghdl: {label}: {top}: pass");
+                } else if outcome.has_face() {
+                    println!(
+                        "orbit-contracts: ghdl: {label}: {top}: fail (the log carries a probed ghdl failure face)"
+                    );
+                    findings.push(outcome);
+                } else {
+                    println!(
+                        "orbit-contracts: ghdl: {label}: {top}: fail (ghdl exited {} without a judged face)",
+                        outcome.exit
+                    );
+                    findings.push(outcome);
+                }
+            }
         }
     }
 
@@ -507,6 +531,33 @@ pub fn drive(request: &Drive) -> Result<(), DriveError> {
         );
         Err(DriveError::Findings(findings))
     }
+}
+
+/// Run one elaborated top and capture its log: `ghdl -r --std=08 <top>
+/// --assert-level=error <extras>`.
+fn run_top(top: &str, extra: &[String], label: &str) -> Result<RunOutcome, DriveError> {
+    println!("orbit-contracts: ghdl: {label}: running {top}");
+    // `--assert-level=error` rides AFTER the top unit: it is a
+    // simulation option, and ghdl rejects it anywhere earlier.
+    let mut run = Command::new(GHDL_BIN);
+    run.args(["-r", STD]).arg(top).arg(ASSERT_LEVEL).args(extra);
+    let output = capture(&mut run).map_err(DriveError::Spawn)?;
+    // The log is both streams joined on their boundary; an empty side
+    // contributes no line, so a quiet run relays no stray blank line.
+    let stdout = lossy(&output.stdout);
+    let stderr = lossy(&output.stderr);
+    let log = match (stdout.is_empty(), stderr.is_empty()) {
+        (true, true) => String::new(),
+        (true, false) => stderr,
+        (false, true) => stdout,
+        (false, false) => format!("{stdout}\n{stderr}"),
+    };
+    print_block(&log);
+    Ok(RunOutcome {
+        top: top.to_string(),
+        exit: output.status.code().unwrap_or(-1),
+        log,
+    })
 }
 
 /// One `ghdl -a` attempt: `Ok` when ghdl accepted the file, `Err` with the

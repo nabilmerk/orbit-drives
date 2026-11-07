@@ -1,17 +1,25 @@
 # The orbit-contracts target fragment. Include it into an orbit project
-# configuration to add the ghdl target:
+# configuration to add the ghdl targets:
 #
 #   orbit config --push include=/path/to/orbit-contracts/config.toml
 #
 # The `orbit-contracts` binary must be on PATH (`cargo install --path .`).
-# Run it through orbit:
+# Run them through orbit:
 #
 #   orbit test --target ghdl -- -gWIDTH=8 --vcd=waves.vcd
+#   orbit build --target ghdl-build -- --top gate
 #
-# No --top is needed: the drive runs the testbench orbit exports as
-# $ORBIT_TB_NAME. Everything after orbit's `--` rides the ghdl -r argv.
+# No --top is needed for `ghdl`: the drive runs the testbench orbit
+# exports as $ORBIT_TB_NAME (through `orbit build`, pass -- --top <name>).
+# Everything after orbit's `--` rides the drive's last tool argv verbatim:
+# the `ghdl -r` argv on the sim face, the `ghdl -e` argv on the build face.
 
 [[target]]
 name = "ghdl"
 description = "VHDL testbenches through ghdl: blueprint-order analysis with the deferral loop, each run gated on ghdl's probed failure vocabulary and the honest exit"
 command = ["orbit-contracts", "ghdl"]
+
+[[target]]
+name = "ghdl-build"
+description = "VHDL builds through ghdl: blueprint-order analysis with the deferral loop, then elaboration per top -- exit honest, no simulation, nothing judged"
+command = ["orbit-contracts", "ghdl-build"]

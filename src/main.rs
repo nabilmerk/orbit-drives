@@ -1,7 +1,7 @@
 //! The `orbit-contracts` binary: argv in, honest exit out.
 //!
 //! ```text
-//! orbit-contracts ghdl --blueprint <path> --top <name> [extra ghdl args...]
+//! orbit-contracts <SUBCOMMAND> --blueprint <path> --top <name> [extra tool args...]
 //! ```
 //!
 //! Orbit spawns the target with the working directory set to the target's
@@ -12,32 +12,36 @@
 //! (`src/core/target.rs` of orbit: `[&arguments, extra_args].concat()`),
 //! so there is no separator to find here: the drive's own flags are
 //! `--blueprint`, `--top`, `-h`/`--help`, and EVERY other token rides the
-//! `ghdl -r` argv verbatim. With no `--top`, the drive runs the testbench
-//! orbit exports as `$ORBIT_TB_NAME` (empty in all-mode, which counts as
-//! absent); it is a loud exit-2 when neither names a top.
+//! drive's last tool argv verbatim. With no `--top`, the drive runs the
+//! testbench orbit exports as `$ORBIT_TB_NAME` (empty in all-mode, which
+//! counts as absent); it is a loud exit-2 when neither names a top.
 
 use std::env;
 use std::path::PathBuf;
 use std::process::ExitCode;
-use std::str::FromStr;
 
-use orbit_contracts::contracts::Tool;
 use orbit_contracts::ghdl;
 
 const USAGE: &str = "\
 orbit-contracts: the probed failure vocabularies and the honest-exit targets for orbit
 
 USAGE:
-    orbit-contracts <TOOL> [TOOL OPTIONS] [EXTRA TOOL ARGS...]
+    orbit-contracts <SUBCOMMAND> [SUBCOMMAND OPTIONS] [EXTRA TOOL ARGS...]
 
-TOOLS:
-    ghdl    analyze the blueprint's VHDL in blueprint order, elaborate and
-            run each top, and gate every run log on ghdl's probed failure
-            vocabulary
+SUBCOMMANDS:
+    ghdl         analyze the blueprint's VHDL in blueprint order, elaborate
+                 and run each top, and gate every run log on ghdl's probed
+                 failure vocabulary AND ghdl's exit (the sim face)
+    ghdl-build   analyze the blueprint's VHDL in blueprint order and
+                 elaborate each top, exit honest; no simulation and
+                 nothing judged -- the elaboration exits are honest, so
+                 the exit is the only witness a build needs (the build
+                 face)
 
-GHDL OPTIONS:
+SHARED OPTIONS:
     --blueprint <path>  the TSV blueprint (default: $ORBIT_BLUEPRINT)
-    --top <name>        a top unit to elaborate and run (repeatable)
+    --top <name>        a top unit to elaborate (and run: `ghdl`);
+                        repeatable
     -h, --help          print this help
 
 TOPS:
@@ -46,18 +50,50 @@ TOPS:
     neither names a top
 
 EXTRAS:
-    every other argument rides the `ghdl -r` argv verbatim: orbit strips
-    its own `--` separator and appends the extras straight onto this
-    argv, so `orbit test --target ghdl -- -gW=4 --vcd=w.vcd` passes both
-    through to ghdl
+    every other argument rides the drive's LAST tool argv verbatim: the
+    `ghdl -r` argv on the sim face, the `ghdl -e` argv on the build face
+    (there is no run to carry them, and a dropped argument would be a
+    silent degradation). Orbit strips its own `--` separator and appends
+    the extras straight onto this argv, so `orbit test --target ghdl --
+    -gW=4 --vcd=w.vcd` passes both through to ghdl
 
 EXITS:
-    0    clean (every run judged clean)
+    0    clean (every run judged clean, or every top elaborated clean)
     1    findings (a log carried a failure face, a run exited nonzero, or
          ghdl reported a broken design)
     2    usage (bad argv, no top to run, unreadable blueprint, a fileset
          the drive does not carry)
 ";
+
+/// The subcommands the binary carries: one per orbit target entry, each a
+/// face of a probed tool's drive. A name outside this registry is a loud
+/// usage error, never a guess.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+enum Subcommand {
+    /// `ghdl-build`: ghdl's build face -- analyze + elaborate per top,
+    /// exit honest, no simulation, nothing judged.
+    GhdlBuild,
+    /// `ghdl`: ghdl's sim face -- the judged drive (analyze + elaborate +
+    /// run, every run log gated).
+    GhdlSim,
+}
+
+impl Subcommand {
+    /// The drive mode the subcommand picks: how far the shared ghdl drive
+    /// goes.
+    fn mode(self) -> ghdl::Mode {
+        match self {
+            Subcommand::GhdlBuild => ghdl::Mode::Build,
+            Subcommand::GhdlSim => ghdl::Mode::Sim,
+        }
+    }
+}
+
+/// The error for a subcommand name that resolves to nothing: loud,
+/// usage-class, exit 2.
+fn unknown_subcommand(name: &str) -> String {
+    format!("no target named {name:?}: carried subcommands: ghdl, ghdl-build")
+}
 
 /// The argv parse outcome.
 #[derive(Clone, Debug, PartialEq, Eq)]
@@ -71,13 +107,13 @@ enum Cli {
 /// The argv-level request, before the environment fills the gaps.
 #[derive(Clone, Debug, PartialEq, Eq)]
 struct Request {
-    /// The tool to drive.
-    tool: Tool,
+    /// The subcommand to drive.
+    subcommand: Subcommand,
     /// The `--blueprint` path, when given.
     blueprint: Option<PathBuf>,
     /// The `--top` units, in the order given.
     tops: Vec<String>,
-    /// The argv after `--`, appended to each `ghdl -r`.
+    /// The argv after `--`, appended to the drive's last tool argv.
     extra: Vec<String>,
 }
 
@@ -93,7 +129,11 @@ fn parse(argv: &[String]) -> Result<Cli, CliError> {
     if tool_arg == "--help" || tool_arg == "-h" {
         return Ok(Cli::Help);
     }
-    let tool = Tool::from_str(tool_arg).map_err(|e| CliError(e.to_string()))?;
+    let subcommand = match tool_arg.as_str() {
+        "ghdl-build" => Subcommand::GhdlBuild,
+        "ghdl" => Subcommand::GhdlSim,
+        other => return Err(CliError(unknown_subcommand(other))),
+    };
 
     let mut blueprint: Option<PathBuf> = None;
     let mut tops = Vec::new();
@@ -121,14 +161,14 @@ fn parse(argv: &[String]) -> Result<Cli, CliError> {
                 extra.extend(rest.cloned());
                 break;
             }
-            // Everything the drive does not own is a ghdl run extra: the
+            // Everything the drive does not own is a tool extra: the
             // orbit spawn shape appends the user's extras with no
             // separator, and rejecting one would reject the whole target.
             other => extra.push(other.to_string()),
         }
     }
     Ok(Cli::Run(Request {
-        tool,
+        subcommand,
         blueprint,
         tops,
         extra,
@@ -183,22 +223,28 @@ fn drive_request(request: Request) -> ExitCode {
     let tops = resolve_tops(request.tops, tb_name.as_deref());
     if tops.is_empty() {
         eprintln!(
-            "orbit-contracts: error: no top to run: pass --top <name>, or run through \
-             `orbit test --target ghdl` so $ORBIT_TB_NAME is set"
+            "orbit-contracts: error: no top to drive: pass --top <name>, or come through \
+             orbit with $ORBIT_TB_NAME set (`orbit test --target ghdl` exports it)"
         );
         return ExitCode::from(2);
     }
     if defaulted {
         eprintln!(
-            "orbit-contracts: note: no --top given; running the testbench $ORBIT_TB_NAME: {}",
+            "orbit-contracts: note: no --top given; taking the testbench $ORBIT_TB_NAME: {}",
             tops[0]
         );
     }
-    match ghdl::drive(&ghdl::Drive {
-        blueprint,
-        tops,
-        extra: request.extra,
-    }) {
+    let outcome = match request.subcommand {
+        Subcommand::GhdlBuild | Subcommand::GhdlSim => ghdl::drive(
+            &ghdl::Drive {
+                blueprint,
+                tops,
+                extra: request.extra,
+            },
+            request.subcommand.mode(),
+        ),
+    };
+    match outcome {
         Ok(()) => ExitCode::SUCCESS,
         Err(e) => ExitCode::from(e.exit_code()),
     }
@@ -236,13 +282,29 @@ mod tests {
             ]))
             .unwrap(),
         );
-        assert_eq!(request.tool, Tool::Ghdl);
+        assert_eq!(request.subcommand, Subcommand::GhdlSim);
         assert_eq!(request.blueprint, Some(PathBuf::from("b.tsv")));
         assert_eq!(request.tops, vec!["tb_a".to_string(), "tb_b".to_string()]);
         assert_eq!(
             request.extra,
             vec!["-gW=4".to_string(), "--vcd=w.vcd".to_string()]
         );
+    }
+
+    #[test]
+    fn ghdl_build_is_its_own_subcommand_driving_the_build_face() {
+        // The split: `ghdl-build` is a separate target entry that shares
+        // the drive with `ghdl` but stops after the elaborations.
+        let request = run_of(parse(&argv(&["ghdl-build", "--top", "tb"])).unwrap());
+        assert_eq!(request.subcommand, Subcommand::GhdlBuild);
+        assert_eq!(request.subcommand.mode(), ghdl::Mode::Build);
+    }
+
+    #[test]
+    fn ghdl_drives_the_sim_face() {
+        let request = run_of(parse(&argv(&["ghdl", "--top", "tb"])).unwrap());
+        assert_eq!(request.subcommand, Subcommand::GhdlSim);
+        assert_eq!(request.subcommand.mode(), ghdl::Mode::Sim);
     }
 
     #[test]
@@ -269,6 +331,13 @@ mod tests {
         assert!(
             err.0.contains("xsim"),
             "the error should name the tool: {}",
+            err.0
+        );
+        // The error also names what IS carried, so the fix is readable
+        // from the message alone.
+        assert!(
+            err.0.contains("ghdl-build"),
+            "the error should list the carried subcommands: {}",
             err.0
         );
     }
