@@ -11,9 +11,11 @@
 //! carried tool that speaks both. It also consumes the blueprint's
 //! library column (the §25 multi-library face, probed live on Vivado
 //! 2025.2.1): every xvhdl ride compiles into `--work=<entry.library>`,
-//! xelab makes every carried library visible with one `-L <lib>` per
-//! distinct library and names the top as `<the top's library>.<top>`
-//! (the ladder of [`top_library`], the ghdl/nvc shape), and the
+//! xelab names the top under its own library's prefix
+//! (`<the top's library>.<top>`, the ladder of [`top_library`] -- the
+//! prefix is REACHABILITY, not binding: the bare top resolves in `work`
+//! only, probed, and the top's form provably does not steer xelab's
+//! default component binding, see [`library_search_args`]), and the
 //! generated script reads each VHDL file back with
 //! `read_vhdl -library <entry.library>`. The Verilog legs carry no
 //! library column: Verilog speaks no library clauses, so xvlog lands
@@ -663,23 +665,27 @@ pub fn drive(request: &Drive, mode: Mode) -> Result<(), DriveError> {
             }
             Mode::Sim => {
                 println!("orbit-drives: vivado: {label}: elaborating {top} from {top_library}");
-                // One `-L <lib>` per carried library makes each library
-                // visible for binding (probed live: a consumer's
-                // cross-library reference resolves once both sides are
-                // compiled and named on the argv), and the top rides its
-                // own library's prefix (`<the top's library>.<top>`, the
-                // ghdl/nvc ladder -- the pin is load-bearing: a top
-                // compiled into a named library is not reachable as
-                // `work.<top>`); the snapshot lands as `xsim.dir/<top>`
-                // and is validated by elaboration (an unknown top answers
-                // `ERROR: [XSIM 43-3225] Cannot find design unit ...`,
-                // exit 1, probed).
+                // The top rides its own library's prefix
+                // (`<the top's library>.<top>`) -- the pin is load-bearing
+                // for REACHABILITY: the bare top resolves in `work` only
+                // (probed: a top compiled into a named library answers
+                // `ERROR: [XSIM 43-3225] Cannot find design unit
+                // work.<top> in library work` -- xelab's own error names
+                // the implicit `work.` prefix). The one `-L <lib>` per
+                // carried library makes each library visible to the
+                // VERILOG and mixed-language binding face (xelab's own
+                // `-L` help: "search libraries for the instantiated
+                // design units in a Verilog or Mixed language design");
+                // the pure-VHDL faces need none of it -- the `library
+                // <other>;` clauses resolve against the sibling
+                // `xsim.dir/<other>/` directories automatically, and
+                // default component binding searches the component
+                // declaration's own library (see `library_search_args`).
+                // The snapshot lands as `xsim.dir/<top>` and is validated
+                // by elaboration (an unknown top answers the same 43-3225
+                // refusal, exit 1, probed).
                 let mut elaborate = Command::new(&xelab);
-                elaborate
-                    .args(library_search_args(&vhdl, &top_library))
-                    .arg(format!("{top_library}.{top}"))
-                    .arg("-s")
-                    .arg(top);
+                elaborate.args(elaborate_args(&vhdl, &top_library, top));
                 Recipe::from_env().apply_to(&mut elaborate, &vivado);
                 let output = capture(XELAB_BIN, &mut elaborate).map_err(DriveError::Spawn)?;
                 let log = join_log(lossy(&output.stdout), lossy(&output.stderr));
@@ -856,8 +862,14 @@ fn compile_verilog(files: &[PathBuf], xvlog: &Path, vivado: &Path) -> Result<(),
 /// need not populate any more: a testbench compiled into
 /// `--work=grlib` is `grlib.<top>`, and `work.<top>` answers xelab's
 /// `ERROR: [XSIM 43-3225] Cannot find design unit ...` refusal (exit 1,
-/// probed). So the prefix must be the top's library, and the resolution
-/// is the ladder the ghdl and nvc drives carry, loudest voice first:
+/// probed). The prefix must be the top's library -- and it must stay a
+/// prefix: the BARE top is not an alternative, probed live on 2025.2.1
+/// (2026-11-08) -- a bare name is implicitly `work.`-qualified and
+/// resolves in the work library ONLY (`xelab -L work -L grlib tb` with
+/// everything compiled into `--work=grlib` answers `ERROR: [XSIM
+/// 43-3225] Cannot find design unit work.tb in library work`; xelab's
+/// own refusal names the implicit prefix). So the resolution is the
+/// ladder the ghdl and nvc drives carry, loudest voice first:
 ///
 /// 1. `$ORBIT_PROJECT_LIBRARY` -- orbit's own voice. The planner sets it
 ///    on every spawned target to the working project's HDL library, and
@@ -877,6 +889,16 @@ fn compile_verilog(files: &[PathBuf], xvlog: &Path, vivado: &Path) -> Result<(),
 ///    whole `xsim.dir/` first, so `work` cannot hold a stale unit; a
 ///    wrong guess dies loudly on xelab's own design-unit refusal --
 ///    never a silent degradation.
+///
+/// The prefix is REACHABILITY only. It neither causes nor cures xelab's
+/// default component binding: probed live on 2025.2.1 (2026-11-08), a
+/// VHDL default binding (a component instance with no binding
+/// indication) searches the library the COMPONENT DECLARATION lives in
+/// -- a component and its entity co-located in any carried library bind
+/// under the bare and the qualified top alike, and a component whose
+/// entity sits in another library black-boxes
+/// (`WARNING: [VRFC 10-4940] ... remains a black box`) under both --
+/// see [`library_search_args`] and the README's honest limits.
 fn top_library(project_library: Option<&str>, entries: &[Entry]) -> String {
     match project_library {
         Some(library) if !library.is_empty() => library.to_string(),
@@ -897,12 +919,35 @@ fn top_library(project_library: Option<&str>, entries: &[Entry]) -> String {
 /// blueprint's VHDL rows declare (first-occurrence order), then
 /// [`WORK`] (the Verilog files' one home, and the VHDL `work.` selected
 /// name's target), then the ladder-resolved top library if neither
-/// carried it. xelab makes each `-L` library visible for binding (probed
-/// live: the cross-library reference in a `work` testbench resolves once
-/// the provider's library rides the argv), and it tolerates a `-L`
-/// naming a library that holds nothing (probed: an absent library's
-/// `-L` is accepted, exit 0) -- so over-naming costs nothing and a
-/// missing name strands the binding.
+/// carried it. xelab tolerates a `-L` naming a library that holds
+/// nothing (probed: an absent library's `-L` is accepted, exit 0) -- so
+/// over-naming costs nothing.
+///
+/// What `-L` does NOT do is steer VHDL binding -- and this drive never
+/// claims it does. The probed faces (2025.2.1, 2026-11-08):
+///
+/// - xelab's own `-L` help: "Specify search libraries for the
+///   instantiated design units in a **Verilog or Mixed language**
+///   design." The pure-VHDL faces need none of it: a `library <other>;`
+///   clause resolves against the sibling `xsim.dir/<other>/` directories
+///   automatically (probed: the whole two-library drive elaborates and
+///   passes with the `-L` set stripped), and the design-unit prefix
+///   names the top's library explicitly.
+/// - A VHDL DEFAULT component binding (a component instance with no
+///   binding indication) searches the library the COMPONENT DECLARATION
+///   lives in, and nothing else. Component and entity co-located in any
+///   one carried library bind under the bare and the qualified top
+///   alike (probed both ways: `SIM PASSED`); a component whose entity
+///   sits in a DIFFERENT library black-boxes -- `WARNING: [VRFC 10-4940]
+///   '<unit>' remains a black box since it has no binding entity` --
+///   under both, with `-L` on the argv, `-relax` on the argv, and in
+///   either `-L` order (probed exhaustively; no xelab flag extends the
+///   search -- the help carries no binding option at all). That wall is
+///   the honest limit of the §25 multi-library sim face: designs
+///   relying on cross-library default binding (the GRLIB style, whose
+///   own sim flows map every library into one) fail loudly on the
+///   10-4940 face and need explicit `entity <lib>.<name>` bindings to
+///   simulate multi-library -- see the README's honest limits.
 fn library_search_args(entries: &[Entry], top_library: &str) -> Vec<String> {
     let mut libraries: Vec<String> = Vec::new();
     for entry in entries {
@@ -921,6 +966,21 @@ fn library_search_args(entries: &[Entry], top_library: &str) -> Vec<String> {
         args.push("-L".to_string());
         args.push(library);
     }
+    args
+}
+
+/// The design arguments of the xelab argv: the [`library_search_args`]
+/// set, then the top under its own library's prefix
+/// (`<the top's library>.<top>` -- the BARE top is not an alternative:
+/// it is implicitly `work.`-qualified and resolves in the work library
+/// only, probed live, see [`top_library`]), then `-s <top>` -- the
+/// snapshot keeps the top's own name, which the run argv
+/// (`xsim <top> -R`) and the missing-snapshot crash door key on.
+fn elaborate_args(entries: &[Entry], top_library: &str, top: &str) -> Vec<String> {
+    let mut args = library_search_args(entries, top_library);
+    args.push(format!("{top_library}.{top}"));
+    args.push("-s".to_string());
+    args.push(top.to_string());
     args
 }
 
@@ -1226,6 +1286,56 @@ ERROR: Please check the snapshot name which is created during 'xelab',the curren
         assert_eq!(top_library(None, &many), "work");
         // An empty blueprint has no library to name: the default.
         assert_eq!(top_library(None, &[]), "work");
+    }
+
+    #[test]
+    fn the_elaboration_argv_pins_the_top_under_its_library_prefix() {
+        // The xelab argv, pinned whole: the `-L` set, then the top under
+        // its OWN library's prefix, then `-s <top>`. The review round
+        // asked for a BARE top (`xelab -L ... <top> -s <top>`) on the
+        // theory that the qualification black-boxes the default
+        // component bindings -- REFUTED live on 2025.2.1 (2026-11-08):
+        // the default binding searches the component DECLARATION's
+        // library regardless of the top's form (a co-located
+        // component/entity pair binds under the bare and the qualified
+        // top alike; a cross-library pair black-boxes under both), and
+        // the bare top is not even a legal replacement -- it is
+        // implicitly `work.`-qualified and resolves in the work library
+        // only (`xelab -L work -L grlib tb` with everything compiled
+        // into `--work=grlib` answers `ERROR: [XSIM 43-3225] Cannot find
+        // design unit work.tb in library work`, xelab's own error naming
+        // the implicit prefix). The prefix stays: it is the only face
+        // that reaches a top in a named library -- the shape every real
+        // orbit target carries (orbit defaults a project's library to
+        // the project's NAME).
+        let entries = parse_blueprint("VHDL\twork\t./tb.vhd\nVHDL\tgrlib\t./pkg.vhd\n").unwrap();
+        assert_eq!(
+            elaborate_args(&entries, "work", "tb"),
+            vec![
+                "-L".to_string(),
+                "work".to_string(),
+                "-L".to_string(),
+                "grlib".to_string(),
+                "work.tb".to_string(),
+                "-s".to_string(),
+                "tb".to_string(),
+            ]
+        );
+        // The single-library collapse: the prefix names the carried
+        // library (`mylib.tb`), and the snapshot keeps the top's name.
+        let one = parse_blueprint("VHDL\tmylib\t./tb.vhd\n").unwrap();
+        assert_eq!(
+            elaborate_args(&one, "mylib", "tb"),
+            vec![
+                "-L".to_string(),
+                "mylib".to_string(),
+                "-L".to_string(),
+                "work".to_string(),
+                "mylib.tb".to_string(),
+                "-s".to_string(),
+                "tb".to_string(),
+            ]
+        );
     }
 
     #[test]

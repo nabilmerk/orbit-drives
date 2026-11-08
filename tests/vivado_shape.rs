@@ -132,15 +132,24 @@ end architecture sim;
 }
 
 /// The grlib package of the multi-library fixture, and the design and
-/// testbench that consume it across the library boundary -- the multilib
-/// demo's own shape: the package in `grlib`, the design and testbench in
-/// `work`, both consuming `library grlib;`.
+/// testbench that consume it across the library boundary. The testbench
+/// instantiates through a DEFAULT component binding -- the component is
+/// declared in the grlib package and the entity sits beside it in
+/// `grlib`, the testbench in `work` instantiates it bare -- the probed
+/// binding face: a default binding searches the component declaration's
+/// own library, so the co-located pair binds across the drive's
+/// multi-library compile (probed live through this test), while a
+/// component whose entity lives in another library would black-box on
+/// the 10-4940 face (the honest limit, README).
 fn write_multilib(out: &Path) {
     write(
         &out.join("pkg.vhd"),
         "\
 package grlib_pkg is
   constant WIDTH : integer := 8;
+  component gate is
+    port ( o : out integer );
+  end component gate;
 end package;
 ",
     );
@@ -168,7 +177,7 @@ end entity;
 architecture sim of tb is
   signal o : integer;
 begin
-  dut : entity work.gate port map (o);
+  dut : gate port map (o);
   process begin
     wait for 1 ns;
     assert o = 8 report \"width drifted\" severity failure;
@@ -500,16 +509,17 @@ fn the_real_vivado_drive_consumes_two_libraries_end_to_end() {
         std::env::temp_dir().join(format!("orbit-drives-viv-multilib-{}", std::process::id()));
     fs::create_dir_all(&out).unwrap();
 
-    // grlib carries the package; work carries the design and the
-    // testbench, which both reference `library grlib;`. The consumer rows
-    // come FIRST, so the drive only completes through the deferral loop
-    // -- across libraries now, not just within one: pass 1 fails the
-    // consumers on their absent providers, pkg creates the grlib
-    // library, pass 2 retires the design, pass 3 the testbench.
+    // grlib carries the package, the component declaration, AND the
+    // entity; work carries the testbench, which instantiates the
+    // component bare -- a DEFAULT binding across the drive's
+    // multi-library compile. The consumer rows come FIRST, so the drive
+    // only completes through the deferral loop -- across libraries: pass
+    // 1 fails tb (the grlib library is absent) and gate (the pkg not yet
+    // analyzed), pkg retires; pass 2 retires both consumers.
     write_multilib(&out);
     write(
         &out.join("blueprint.tsv"),
-        "VHDL\twork\t./tb.vhd\nVHDL\twork\t./gate.vhd\nVHDL\tgrlib\t./pkg.vhd\n",
+        "VHDL\twork\t./tb.vhd\nVHDL\tgrlib\t./gate.vhd\nVHDL\tgrlib\t./pkg.vhd\n",
     );
 
     // The orbit shape: `$ORBIT_PROJECT_LIBRARY` names the working
@@ -532,7 +542,7 @@ fn the_real_vivado_drive_consumes_two_libraries_end_to_end() {
     );
     let stdout = String::from_utf8_lossy(&orbit_shape.stdout);
     assert!(
-        stdout.contains("3 VHDL file(s) compiled in 3 pass(es)"),
+        stdout.contains("3 VHDL file(s) compiled in 2 pass(es)"),
         "the deferral loop should defer across libraries: tb and gate wait on their \
          providers:\n{stdout}"
     );
@@ -542,8 +552,14 @@ fn the_real_vivado_drive_consumes_two_libraries_end_to_end() {
     );
     assert!(
         stdout.contains("SIM PASSED"),
-        "the relayed log should carry the testbench's own report -- the cross-library \
-         reference resolved through xelab's -L pins:\n{stdout}"
+        "the relayed log should carry the testbench's own report -- the default component \
+         binding resolved across the drive's multi-library compile:\n{stdout}"
+    );
+    assert!(
+        !stdout.contains("remains a black box"),
+        "the probed black-box face must NOT appear: the component and its entity share \
+         grlib, and the binding searches the component's own library (the top's form is \
+         binding-neutral):\n{stdout}"
     );
 
     // The second run in the SAME directory: the wholesale `xsim.dir/`
@@ -614,8 +630,12 @@ fn the_real_vivado_drive_consumes_two_libraries_end_to_end() {
         "the script should read pkg back out of grlib:\n{script}"
     );
     assert!(
-        script.contains("read_vhdl -library work ./gate.vhd\n"),
-        "the script should read gate back out of work:\n{script}"
+        script.contains("read_vhdl -library grlib ./gate.vhd\n"),
+        "the script should read gate back out of grlib:\n{script}"
+    );
+    assert!(
+        script.contains("read_vhdl -library work ./tb.vhd\n"),
+        "the script should read tb back out of work:\n{script}"
     );
     for netlist in ["netlists/tb.dcp", "netlists/tb.v", "netlists/tb.edf"] {
         assert!(
