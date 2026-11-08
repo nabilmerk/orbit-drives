@@ -29,12 +29,12 @@
 //!   model builds, judged model runs.
 //! - [`yosys`]: the yosys synthesis drive -- one script-driven synth per
 //!   top, the netlists as payload. Build only: yosys has no runtime.
-//! - [`vivado`]: the vivado target drives -- both languages compiled,
-//!   the blueprint's library column consumed on both faces (per-file
-//!   xvhdl libraries, the xelab `-L` set, the script's `read_vhdl
-//!   -library` lines), the generated synthesis with the catch-guard, and
-//!   the judged xsim runs (the run exit is a lie; the line-start faces
-//!   are the truth).
+//! - [`vivado`]: the vivado target drives -- both languages compiled on
+//!   the single-work sim face (the mapped `xsim.ini` carrying the
+//!   blueprint's libraries, the bare xelab top), the build face's
+//!   generated synthesis with the per-library `read_vhdl -library` reads
+//!   and the catch-guard, and the judged xsim runs (the run exit is a
+//!   lie; the line-start faces are the truth).
 //! - [`quartus`]: the quartus target drives -- the DOCUMENTED-ONLY
 //!   drive: the generated `.qsf` + the batch `quartus_map` on the build
 //!   face, the bundled Questa (vlib/vmap/vcom/vsim) on the judged sim

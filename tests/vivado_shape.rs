@@ -5,9 +5,9 @@
 //! loop's order-sensitive compile, the part gate, a judged compile
 //! failure, the LYING RUN EXIT (a severity-failure testbench that exits 0
 //! and must fail on its `Failure:` face), the clean sim, the
-//! multi-library face (a two-library blueprint whose cross-library
-//! reference resolves, driven through BOTH faces), and the generated
-//! script's `read_vhdl -library` lines.
+//! single-work merge of a two-library blueprint (the mapped `xsim.ini`,
+//! the bare top, the merged work library) through BOTH faces, and the
+//! generated script's `read_vhdl -library` lines.
 //!
 //! Ignored by default -- it needs the Vivado install; run it with
 //! `cargo test -- --ignored`. The test locates the install the way the
@@ -132,24 +132,23 @@ end architecture sim;
 }
 
 /// The grlib package of the multi-library fixture, and the design and
-/// testbench that consume it across the library boundary. The testbench
-/// instantiates through a DEFAULT component binding -- the component is
-/// declared in the grlib package and the entity sits beside it in
-/// `grlib`, the testbench in `work` instantiates it bare -- the probed
-/// binding face: a default binding searches the component declaration's
-/// own library, so the co-located pair binds across the drive's
-/// multi-library compile (probed live through this test), while a
-/// component whose entity lives in another library would black-box on
-/// the 10-4940 face (the honest limit, README).
+/// testbench that consume it across the library boundary -- under the
+/// single-work sim face the blueprint's two source libraries MERGE into
+/// `work` (the drive maps `grlib=xsim.dir/work` in the cwd `xsim.ini`,
+/// so the sources' `library grlib;` clauses resolve), and the testbench
+/// rides the DIRECT `entity work.gate` instantiation: the merged work
+/// library holds every unit, so the reference resolves trivially on the
+/// sim face while the build face's `read_vhdl -library` reads keep the
+/// rows' named libraries. (The DEFAULT component-binding face does NOT
+/// survive the merge -- probed: a component reached through a mapped
+/// alias still black-boxes on the 10-4940 face; that wall is the
+/// README's honest limit.)
 fn write_multilib(out: &Path) {
     write(
         &out.join("pkg.vhd"),
         "\
 package grlib_pkg is
   constant WIDTH : integer := 8;
-  component gate is
-    port ( o : out integer );
-  end component gate;
 end package;
 ",
     );
@@ -177,7 +176,7 @@ end entity;
 architecture sim of tb is
   signal o : integer;
 begin
-  dut : gate port map (o);
+  dut : entity work.gate port map (o);
   process begin
     wait for 1 ns;
     assert o = 8 report \"width drifted\" severity failure;
@@ -191,30 +190,24 @@ end architecture;
 
 /// The exact spawn shape: no `--top`, `$ORBIT_TB_NAME` exported, the
 /// working directory at the target's output directory, `VIVADO_BIN`
-/// pointing at the resolved install, and `$ORBIT_PROJECT_LIBRARY` set
-/// only when the test asks for it -- orbit always sets it on a real
-/// target, so the direct-invocation tests strip it (an inherited value
-/// from the driving shell would leak in).
+/// pointing at the resolved install; `$ORBIT_PROJECT_LIBRARY` is
+/// stripped regardless (the single-work face reads no project library,
+/// and an inherited value from the driving shell must not leak).
 fn spawn_shape<'a>(
     command: &'a mut Command,
     out: &Path,
     vivado: &Path,
     tb: &str,
-    project_library: Option<&str>,
 ) -> &'a mut Command {
-    let shaped = command
+    command
         .env("VIVADO_BIN", vivado)
         .env("ORBIT_BLUEPRINT", out.join("blueprint.tsv"))
         .env("ORBIT_TB_NAME", tb)
         .env_remove("ORBIT_BLUEPRINT_PLAN")
         .env_remove("ORBIT_PROJECT_LIBRARY")
         .env_remove("LOCPATH")
-        .env_remove("LD_LIBRARY_PATH");
-    let shaped = match project_library {
-        Some(library) => shaped.env("ORBIT_PROJECT_LIBRARY", library),
-        None => shaped,
-    };
-    shaped.current_dir(out)
+        .env_remove("LD_LIBRARY_PATH")
+        .current_dir(out)
 }
 
 #[test]
@@ -240,7 +233,6 @@ fn the_real_vivado_sim_faces_catch_the_lying_exit_and_run_clean() {
         &out,
         &vivado,
         "tb_clean",
-        None,
     )
     .output()
     .unwrap();
@@ -259,6 +251,10 @@ fn the_real_vivado_sim_faces_catch_the_lying_exit_and_run_clean() {
         stdout.contains("compiling 3 VHDL file(s) in blueprint order with the deferral loop"),
         "the VHDL compile should ride the deferral loop:\n{stdout}"
     );
+    assert!(
+        !out.join("xsim.ini").exists(),
+        "a single-`work` blueprint writes no mapped-library file"
+    );
 
     // The lying exit, live: the severity-failure testbench stops at the
     // assert, xsim EXITS 0 (probed lie), and the drive must fail it on
@@ -272,7 +268,6 @@ fn the_real_vivado_sim_faces_catch_the_lying_exit_and_run_clean() {
         &out,
         &vivado,
         "tb_fatal",
-        None,
     )
     .output()
     .unwrap();
@@ -331,7 +326,6 @@ end architecture rtl;
         &out,
         &vivado,
         "broken",
-        None,
     )
     .output()
     .unwrap();
@@ -380,7 +374,6 @@ fn the_real_vivado_build_face_requires_the_part_before_any_drive() {
         &out,
         &vivado,
         "top",
-        None,
     )
     .output()
     .unwrap();
@@ -407,7 +400,6 @@ fn the_real_vivado_build_face_requires_the_part_before_any_drive() {
         &out,
         &vivado,
         "top",
-        None,
     )
     .output()
     .unwrap();
@@ -456,7 +448,6 @@ fn the_real_vivado_build_face_synthesizes_and_writes_the_netlists() {
         &out,
         &vivado,
         "top",
-        None,
     )
     .output()
     .unwrap();
@@ -509,103 +500,88 @@ fn the_real_vivado_drive_consumes_two_libraries_end_to_end() {
         std::env::temp_dir().join(format!("orbit-drives-viv-multilib-{}", std::process::id()));
     fs::create_dir_all(&out).unwrap();
 
-    // grlib carries the package, the component declaration, AND the
-    // entity; work carries the testbench, which instantiates the
-    // component bare -- a DEFAULT binding across the drive's
-    // multi-library compile. The consumer rows come FIRST, so the drive
-    // only completes through the deferral loop -- across libraries: pass
-    // 1 fails tb (the grlib library is absent) and gate (the pkg not yet
-    // analyzed), pkg retires; pass 2 retires both consumers.
+    // Two source libraries: `grlib` carries the package, `work` the
+    // design and the testbench (which instantiates DIRECTLY --
+    // `entity work.gate`, the merged work library holding every unit).
+    // The consumer rows come FIRST, so the drive only completes through
+    // the deferral loop -- pass 1 fails tb and gate on their not-yet-
+    // compiled providers, pkg retires; pass 2 retires gate while tb
+    // waits one more round on the not-yet-compiled gate (the tb row
+    // comes first); pass 3 retires tb.
     write_multilib(&out);
     write(
         &out.join("blueprint.tsv"),
-        "VHDL\twork\t./tb.vhd\nVHDL\tgrlib\t./gate.vhd\nVHDL\tgrlib\t./pkg.vhd\n",
+        "VHDL\twork\t./tb.vhd\nVHDL\twork\t./gate.vhd\nVHDL\tgrlib\t./pkg.vhd\n",
     );
 
-    // The orbit shape: `$ORBIT_PROJECT_LIBRARY` names the working
-    // project's library (`work` here; under a real orbit project it is
-    // the project's NAME -- the ladder reads it first either way).
+    // The single-work face: every file compiles into `work`, and the
+    // drive maps `grlib=xsim.dir/work` in the cwd `xsim.ini` so the
+    // sources' `library grlib; use grlib.grlib_pkg.all;` clauses resolve
+    // against the merged library (the GRLIB vmap convention, probed).
     let orbit_shape = spawn_shape(
         Command::new(env!("CARGO_BIN_EXE_orbit-drives")).arg("vivado"),
         &out,
         &vivado,
         "tb",
-        Some("work"),
     )
     .output()
     .unwrap();
     assert!(
         orbit_shape.status.success(),
-        "the multi-library run (with orbit's env) failed:\n{}{}",
+        "the multi-library run failed:\n{}{}",
         String::from_utf8_lossy(&orbit_shape.stdout),
         String::from_utf8_lossy(&orbit_shape.stderr)
     );
     let stdout = String::from_utf8_lossy(&orbit_shape.stdout);
     assert!(
-        stdout.contains("3 VHDL file(s) compiled in 2 pass(es)"),
-        "the deferral loop should defer across libraries: tb and gate wait on their \
-         providers:\n{stdout}"
+        stdout.contains("3 VHDL file(s) compiled in 3 pass(es)"),
+        "the deferral loop should defer: tb waits on its providers across two \
+         passes:\n{stdout}"
     );
     assert!(
         stdout.contains("tb: pass"),
-        "the cross-library run should judge clean:\n{stdout}"
+        "the merged-library run should judge clean:\n{stdout}"
     );
     assert!(
         stdout.contains("SIM PASSED"),
-        "the relayed log should carry the testbench's own report -- the default component \
-         binding resolved across the drive's multi-library compile:\n{stdout}"
+        "the relayed log should carry the testbench's own report -- the direct \
+         instantiation resolved inside the merged work library:\n{stdout}"
     );
     assert!(
         !stdout.contains("remains a black box"),
-        "the probed black-box face must NOT appear: the component and its entity share \
-         grlib, and the binding searches the component's own library (the top's form is \
-         binding-neutral):\n{stdout}"
+        "the probed black-box face must NOT appear: the direct instantiation resolves \
+         inside work:\n{stdout}"
+    );
+    let ini = fs::read_to_string(out.join("xsim.ini")).unwrap();
+    assert_eq!(
+        ini, "grlib=xsim.dir/work\n",
+        "the mapped-library file should name \
+         the blueprint's non-work library exactly once:\n{ini}"
     );
 
     // The second run in the SAME directory: the wholesale `xsim.dir/`
-    // wipe takes every named library of the run before with it -- the
-    // run-scoped state covers the multi-library face for free, because
-    // vivado nests every library in the one state directory.
+    // wipe and the fresh `xsim.ini` keep the clock clean -- the run-
+    // scoped state covers the merged face.
     let second = spawn_shape(
         Command::new(env!("CARGO_BIN_EXE_orbit-drives")).arg("vivado"),
         &out,
         &vivado,
         "tb",
-        Some("work"),
     )
     .output()
     .unwrap();
     assert!(
         second.status.success(),
-        "the second multi-library run failed:\n{}{}",
+        "the second merged run failed:\n{}{}",
         String::from_utf8_lossy(&second.stdout),
         String::from_utf8_lossy(&second.stderr)
     );
 
-    // The same blueprint, direct invocation (no orbit env): the ladder
-    // falls to vivado's default `work` -- the designated top's own
-    // library here -- and the drive still completes, starting from the
-    // wiped state of the run before.
-    let direct = spawn_shape(
-        Command::new(env!("CARGO_BIN_EXE_orbit-drives")).arg("vivado"),
-        &out,
-        &vivado,
-        "tb",
-        None,
-    )
-    .output()
-    .unwrap();
-    assert!(
-        direct.status.success(),
-        "the multi-library run (direct, no env) failed:\n{}{}",
-        String::from_utf8_lossy(&direct.stdout),
-        String::from_utf8_lossy(&direct.stderr)
-    );
-
-    // The build face on the same two-library blueprint: the script reads
-    // each file out of ITS library and the cross-library synth still
-    // completes -- the netlists land. The top here is the fixture's own
-    // `tb` (the multilib fixture has no entity named `top`).
+    // The build face on the same blueprint: the script reads each file
+    // out of ITS ROW's library (the library column's build face, the
+    // ruling keeps) and the synth completes -- the netlists land. The
+    // top here is the fixture's own `tb` (the fixture has no entity
+    // named `top`).
     let synth = spawn_shape(
         Command::new(env!("CARGO_BIN_EXE_orbit-drives"))
             .arg("vivado-build")
@@ -614,7 +590,6 @@ fn the_real_vivado_drive_consumes_two_libraries_end_to_end() {
         &out,
         &vivado,
         "tb",
-        Some("work"),
     )
     .output()
     .unwrap();
@@ -630,8 +605,8 @@ fn the_real_vivado_drive_consumes_two_libraries_end_to_end() {
         "the script should read pkg back out of grlib:\n{script}"
     );
     assert!(
-        script.contains("read_vhdl -library grlib ./gate.vhd\n"),
-        "the script should read gate back out of grlib:\n{script}"
+        script.contains("read_vhdl -library work ./gate.vhd\n"),
+        "the script should read gate back out of work:\n{script}"
     );
     assert!(
         script.contains("read_vhdl -library work ./tb.vhd\n"),

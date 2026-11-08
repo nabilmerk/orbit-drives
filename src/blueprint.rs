@@ -25,10 +25,13 @@ pub struct Entry {
     /// library name (orbit defaults it to the project's own name, not to
     /// any tool's `work`). Consumed verbatim by the VHDL drives' per-file
     /// `--work` pin (the §25 multi-library face, probed live on ghdl
-    /// 6.0.0 and nvc 1.23.0) and by the vivado drive on both faces -- the
-    /// per-file xvhdl pin and the generated script's `read_vhdl -library`
-    /// lines (probed live on Vivado 2025.2.1); the other drives still
-    /// compile every file into their tool's single default library.
+    /// 6.0.0 and nvc 1.23.0) and by the vivado drive where its tools
+    /// serve it -- the generated script's `read_vhdl -library` lines on
+    /// the build face and the sim face's `xsim.ini` mapped-library lines
+    /// (the single-work sim ruling, 2026-11-08: the sim compile rides
+    /// ONE `work` library, xsim's LRM-strict default binding being
+    /// argv-incurable); the other drives still compile every file into
+    /// their tool's single default library.
     pub library: String,
     /// The file path, as the blueprint wrote it.
     pub path: PathBuf,
@@ -283,12 +286,13 @@ pub fn verilog_only(entries: &[Entry]) -> Result<Vec<PathBuf>, crate::iverilog::
 
 /// The VHDL entries and the Verilog files of the blueprint, in blueprint
 /// order: the pair the vivado faces consume -- the VHDL entries with
-/// their blueprint libraries ATTACHED (every xvhdl ride compiles into
-/// `--work=<entry.library>`, the §25 multi-library face, probed live on
-/// Vivado 2025.2.1, and the generated synthesis script reads each back
-/// with `read_vhdl -library <entry.library>`), the `VLOG` and `SYSV`
-/// entries as bare paths (Verilog carries no library clauses -- xvlog
-/// lands them all in `work`).
+/// their blueprint libraries ATTACHED (the generated synthesis script
+/// reads each back with `read_vhdl -library <entry.library>`, and the
+/// sim face maps each non-`work` library to the merged one in its
+/// `xsim.ini`; the sim COMPILE rides single-work since the 2026-11-08
+/// ruling -- the column has no compile face there), the `VLOG` and
+/// `SYSV` entries as bare paths (Verilog carries no library clauses --
+/// xvlog lands them all in `work`).
 ///
 /// Two carried tools speak both languages, so this is the filter shape
 /// that carries two fileset families. Every OTHER entry -- a custom

@@ -92,19 +92,18 @@ Subcommands (one per orbit target entry):
   `netlists/<top>.v`), the log judged on yosys's probed `ERROR:`
   vocabulary and the exit. Build only: yosys has no runtime, there is no
   sim face and nothing runs.
-- `vivado-build` -- the vivado build face: both languages compiled
-  (xvhdl per VHDL file into its own blueprint library with the deferral
-  loop, one order-free xvlog into `work`), then per top the GENERATED
-  synthesis script (`read_vhdl -library <lib>` per VHDL file) through
-  `vivado -mode batch -nojournal -nolog`, the three netlists the payload.
-  Requires `--part <part>` BEFORE any drive (exit 2 at the CLI); no
-  simulation, nothing judged.
-- `vivado` -- the vivado sim face: the same compile, then xelab per top
-  (one `-L` per carried library, the top under its own blueprint
-  library) and one xsim run per snapshot, every run log gated on
-  vivado's probed LINE-START failure vocabulary AND the exit. xsim exits
-  0 on BOTH probed runtime failures, so the judge is the load-bearing
-  gate here.
+- `vivado-build` -- the vivado build face: both languages compiled into
+  `work` (the shared single-work compile), then per top the GENERATED
+  synthesis script (`read_vhdl -library <lib>` per VHDL file, the
+  blueprint's library column) through `vivado -mode batch -nojournal
+  -nolog`, the three netlists the payload. Requires `--part <part>`
+  BEFORE any drive (exit 2 at the CLI); no simulation, nothing judged.
+- `vivado` -- the vivado sim face: the SINGLE-WORK face (every file
+  compiles into `work`, the blueprint's named libraries mapped through
+  the drive's `xsim.ini`), then xelab per top (the bare top) and one
+  xsim run per snapshot, every run log gated on vivado's probed
+  LINE-START failure vocabulary AND the exit. xsim exits 0 on BOTH
+  probed runtime failures, so the judge is the load-bearing gate here.
 - `quartus-build` -- the quartus build face, DOCUMENTED-ONLY: per top a
   GENERATED `.qsf` (DEVICE from `--part`, TOP_LEVEL_ENTITY, one
   `VHDL_FILE` / `VERILOG_FILE` line per blueprint file) and one batch
@@ -472,7 +471,7 @@ spawnability probe.
 - **Both languages ride.** vivado is the one carried tool that speaks
   both: `VHDL` entries compile through xvhdl, `VLOG` and `SYSV` entries
   through xvlog, a custom fileset is the loud not-carried face (exit 2).
-- **xvhdl is order-sensitive within a library**
+- **xvhdl is order-sensitive within the work library**
   (`ERROR: [VRFC 10-2987] 'top' is not compiled in library 'work'`,
   exit 1, probed live on 2025.2.1), so the VHDL files compile ONE
   INVOCATION PER FILE in blueprint order through the deferral loop (the
@@ -482,10 +481,6 @@ spawnability probe.
 - **xvlog is order-free** (a consumer-before-provider pair compiled
   clean, probed live), so the Verilog files compile in ONE invocation
   into `work`.
-- **No std flag is pinned.** The tool default compiles GRLIB-scale
-  designs green; `--2008` breaks them (the `10-3083` homograph walls,
-  probed live). The default is the design, not an
-  oversight.
 - **The compile gates on the exit and is never judged.** Every probed
   compile failure exits 1, and the faces are UPPERCASE `ERROR:` on
   STDOUT -- stderr is empty on every stage-binary drive, error or clean
@@ -493,116 +488,82 @@ spawnability probe.
   keeps the compile faces out of the judge, and the honest exit makes
   them unnecessary there.
 
-### The library column (the §25 multi-library face)
+### The libraries (the single-work sim face, the per-library build face)
 
-The drive consumes the blueprint's library column on BOTH faces, probed
-live on Vivado 2025.2.1 (2026-11-07) -- the same §25 face the ghdl and
-nvc drives carry, on vivado's own one-state-directory resolution:
+The two faces split the blueprint's library column, per the owner's
+ruling (2026-11-08) -- the probed xsim binding rule drove it:
 
-- **Every xvhdl ride compiles into its own blueprint library**
-  (`xvhdl --work=<entry.library> <file>` -- the §25 ruling: the library
-  name is the project's declared name, orbit's planner is its source of
-  truth, and orbit defaults a project's library to the project's NAME,
-  not to any tool's `work`). Vivado's flow keeps ONE state directory:
-  every named library lands as `xsim.dir/<library>/` inside the working
-  directory's one `xsim.dir/` (probed: `--work=grlib` and `-work work`
-  land as siblings there), so libraries compile in ANY blueprint order
-  and the deferral loop (unchanged, per-file) defers a consumer across
-  the library boundary exactly as within one -- the drive's
-  two-library blueprint runs `3 VHDL file(s) compiled in 3 pass(es)`,
-  probed through the drive.
-- **The state wipe covers the multi-library face for free.** The drive
-  wipes the whole `xsim.dir/` before every drive, and that one
-  directory holds EVERY named library beside the snapshots -- so a
-  library a previous drive analyzed but this blueprint no longer names
-  dies with it, and no stale unit stays resolvable (the same stance as
-  the ghdl and nvc scans, here from vivado's own nested layout: no
-  per-library directories sit beside the state directory for a scan to
-  miss).
-- **xvlog carries no library column.** Verilog speaks no library
-  clauses: every `VLOG`/`SYSV` file lands in `work` (`xvlog -work
-  work`), whatever its row declares, and the generated script's
-  `read_verilog` lines stay plain. Documented, not consumed.
-- **xelab names the top under its own library's prefix**
-  (`xelab -L <lib> ... <the top's library>.<top> -s <top>`): one `-L`
-  per distinct carried VHDL library plus `work` and the resolved top
-  library (a `-L` naming a library that holds nothing is accepted
-  silently, exit 0 -- over-naming costs nothing), and the design-unit
-  prefix must be the top's OWN library (`work.<top>` against a top
-  compiled into a named library answers
-  `ERROR: [XSIM 43-3225] Cannot find design unit ...`, exit 1). The
-  prefix resolves loudest voice first: `$ORBIT_PROJECT_LIBRARY` (orbit's
-  planner sets it on every spawned target to the working project's
-  library; the designated testbench is a working-project file); then
-  the blueprint's single carried VHDL library (direct invocation
-  without orbit); then vivado's default `work` -- a guess that cannot
-  pass silently, because the wiped `xsim.dir/` cannot hold a stale
-  unit: a wrong guess dies loudly on xelab's refusal.
-- **The prefix is reachability, not binding -- and the bare top is not
-  an alternative.** Probed live on 2025.2.1 (2026-11-08): a bare design
-  unit is implicitly `work.`-qualified and resolves in the work library
-  ONLY (`xelab -L work -L grlib tb` with everything compiled into
-  `--work=grlib` answers `ERROR: [XSIM 43-3225] Cannot find design unit
-  work.tb in library work` -- xelab's own refusal names the implicit
-  prefix), so the bare form cannot reach a top in a named library -- the
-  shape every real orbit target carries. And the top's form provably
-  does not steer xelab's default component binding either way: a VHDL
-  default binding (a component instance with no binding indication)
-  searches the library the COMPONENT DECLARATION lives in -- a
-  component and its entity co-located in any one carried library bind
-  under the bare and the qualified top alike (probed both ways: the
-  multi-library drive's own component fixture passes under the
-  qualified argv), and a component whose entity sits in a DIFFERENT
-  library black-boxes (`WARNING: [VRFC 10-4940] '<unit>' remains a
-  black box since it has no binding entity`) under both -- with `-L` on
-  the argv (its own help: the `-L` search face is for "a Verilog or
-  Mixed language design"; the pure-VHDL faces need none of it, probed:
-  the two-library drive elaborates and passes with the `-L` set
-  stripped), with `-relax`, and in either `-L` order (probed
-  exhaustively; xelab's help carries no binding option at all). That is
-  the honest wall of the §25 multi-library sim face, below.
-- **The generated script reads each file out of its own library**
-  (`read_vhdl -library <entry.library> <file>` -- the compile's mirror:
-  the file xvhdl analyzed into `--work=<lib>` is the file the script
-  reads back out of `<lib>`; a bare `read_vhdl` would land it in `work`
-  where its consumers cannot see it. `-library` on `read_vhdl` is the
-  GRLIB flow's own shape, probed in hdlm's vivado arc and driven live
-  through the gated tests). `synth_design -top` is unchanged.
-- **The multi-library wall: a default component binding cannot cross
-  libraries.** The probed binding rule (2025.2.1, 2026-11-08): a VHDL
-  component instance with NO binding indication searches the library the
-  COMPONENT DECLARATION lives in, and nothing else -- the `-L` set does
-  not extend it (xelab's own help: the `-L` search face is for "a
-  Verilog or Mixed language design"), `-relax` does not, no `-L` order
-  does, and xelab's help carries no binding option at all. So a closure
-  whose component declarations and entities live in DIFFERENT carried
-  libraries black-boxes at elaboration --
-  `WARNING: [VRFC 10-4940] '<unit>' remains a black box since it has no
-  binding entity`, the elaboration report truncated above the
-  unbound instances, the run failing downstream -- under the bare and
-  the library-qualified top alike (the top's form is binding-neutral,
-  probed both ways). GRLIB-style designs rely on exactly that
-  cross-library default binding, and GRLIB's own sim flows map every
-  library into ONE for exactly this reason -- which is also why the
-  sibling hdlm drive passes the zedboard GRLIB systest: its
-  single-`work` wall co-locates every component declaration with every
-  entity. Under the §25 column the split is real, and the wall is the
-  sim face's honest limit: component-and-entity pairs co-located in any
-  one carried library bind and pass multi-library (the drive's own live
-  fixture pins it); designs that need the cross-library face ride
-  explicit `entity <lib>.<name>` instantiations or a single-library
-  blueprint -- and the failure is never silent: the 10-4940 face lands
-  in the relayed log, the judged run fails, exit 1.
-- **The argv shape changed with the multi-library face** (2026-11-07):
-  a single-`work` blueprint -- every legacy shape -- now rides the SAME
-  library explicitly: `xvhdl -work work f.vhd` became
-  `xvhdl --work=work f.vhd`, the script's `read_vhdl f.vhd` became
-  `read_vhdl -library work f.vhd`, and the xelab argv is UNCHANGED
-  (`-L work work.<top> -s <top>`: the ladder's fallback IS vivado's
-  default, so the old pin is the new argv there). Nothing about the
-  judged faces moved with it; the probed sequences below carry the new
-  argv verbatim, and the single-`work` live tests drive the new shape
-  end to end.
+- **The SIM face rides SINGLE-WORK.** Every file -- VHDL and Verilog
+  alike -- compiles into `work` (`xvhdl --work=work <file>`, the
+  explicit pin; `xvlog -work work` unchanged), and xelab rides the BARE
+  top (`xelab -L work <top> -s <top>` -- a bare design unit is
+  implicitly `work.`-qualified, probed: for a top compiled into a named
+  library the refusal reads `ERROR: [XSIM 43-3225] Cannot find design
+  unit work.tb in library work`, xelab's own error naming the implicit
+  prefix). WHY: xsim's default component binding is LRM-strict --
+  a component instance with no binding indication searches the library
+  the COMPONENT DECLARATION lives in, and nothing else -- and it is
+  argv-incurable (probed exhaustively on 2025.2.1, 2026-11-08: the
+  `-L` set does not extend it -- xelab's own help scopes the `-L` search
+  face to "a Verilog or Mixed language design" -- `-relax` does not, no
+  `-L` order does, no binding option exists in xelab's help at all, and
+  even the mapped-library face below does not lift it). GRLIB-style
+  designs rely on cross-library default binding, and GRLIB's own xsim
+  flows keep ONE physical library for exactly this reason; the
+  single-work merge co-locates every component declaration with every
+  entity, and the drive's two-library live fixture passes through it.
+- **The mapped-library face: the drive writes the cwd `xsim.ini`.**
+  Merging the compile would otherwise strand the sources' named
+  `library grlib; use grlib.grlib_pkg.all;` clauses (probed: the same
+  source compiles with the mapping and dies on the dangling clause
+  without it). So when the blueprint names libraries beyond `work`, the
+  drive writes `xsim.ini` -- one `grlib=xsim.dir/work` line per distinct
+  blueprint library, the GRLIB `vmap` convention (many logical names,
+  one physical library). Probed live: with the mapping the clauses
+  resolve; the tool's own std/ieee defaults stay intact beside the
+  partial ini; `work` never maps to itself; a single-`work` blueprint
+  writes no file at all. Like the quartus sim face's `modelsim.ini`,
+  this file is the drive's state: the stale one dies with the wipe and
+  a fresh one is written per drive. HONEST LIMIT (probed): the mapping
+  resolves CLAUSES, not default bindings -- a component reached through
+  a mapped alias still black-boxes on the 10-4940 face; designs that
+  need that face ride explicit `entity <lib>.<name>` instantiations
+  written against the merged library (`entity work.gate`), and the
+  failure is never silent when they do not.
+- **The BUILD face keeps the library column.** The generated script
+  reads each VHDL file back out of its own row's library
+  (`read_vhdl -library <entry.library> <file>` -- the GRLIB synth flow's
+  own shape, probed in hdlm's vivado arc): synthesis binds
+  cross-library fine (probed through the drive's two-library synth --
+  the netlists land). The per-library reads and the single-work sim
+  compile coexist because the script re-reads the SOURCES: the compile
+  is the build face's pre-flight gate, not the synth design's input.
+- **xvlog carries no library column at any face.** Verilog speaks no
+  library clauses: every `VLOG`/`SYSV` file lands in `work`, whatever
+  its row declares, and the script's `read_verilog` lines stay plain.
+  Documented, not consumed.
+- **The state wipe covers both faces.** The drive wipes the whole
+  `xsim.dir/` before every drive -- the merged work library and the
+  snapshots die together, so no stale unit stays resolvable -- and the
+  stale `xsim.ini` dies with it (a library a previous blueprint mapped
+  cannot leak into this one). Probed honestly: the wipes are otherwise
+  symmetry -- a failed compile or elaboration exits before anything
+  stale could be mistaken for fresh.
+- **No std flag is pinned** (unchanged): the tool default compiles
+  GRLIB-scale designs green; `--2008` breaks them (the `10-3083`
+  homograph walls, probed live).
+- **The argv shapes, dated honestly.** (2026-11-07, one day-lived): the
+  compile and xelab briefly rode per-library `--work=<entry.library>`
+  pins and a `<the top's library>.<top>` design unit -- REFUTED as a
+  binding cure and superseded by the single-work ruling the next day.
+  (2026-11-08, the ruling): the sim compile reverts to the explicit
+  `xvhdl --work=work f.vhd`, the xelab argv drops the qualification
+  (`xelab -L work <top> -s <top>` -- the bare top being work-qualified
+  is exactly what the single-work face wants), the script keeps
+  `read_vhdl -library <entry.library> f.vhd`, and the mapped `xsim.ini`
+  joins the drive's state. Nothing about the judged faces moved with
+  it; the probed sequences below carry the current argv verbatim, and
+  the live tests drive both faces end to end.
 
 ### The build face (`vivado-build`)
 
@@ -633,10 +594,10 @@ nvc drives carry, on vivado's own one-state-directory resolution:
 
 ### The sim face (`vivado`)
 
-- **xelab names the top under its own library's prefix**
-  (`xelab -L <lib> ... <the top's library>.<top> -s <top>`, the library
-  column's face above -- the prefix is reachability, the bare top being
-  work-only, probed); the snapshot lands as `xsim.dir/<top>` and the
+- **xelab rides the bare top over `work`**
+  (`xelab -L work <top> -s <top>`, the single-work face's argv above --
+  a bare design unit is implicitly `work.`-qualified, and everything IS
+  in `work`); the snapshot lands as `xsim.dir/<top>` and the
   elaboration validates the top (an unknown top answers
   `ERROR: [XSIM 43-3225] Cannot find design unit ...`, exit 1,
   probed).
@@ -907,24 +868,26 @@ the drive joins the streams, so the face reads either way.
 
 | face / fact | argv that wrote it | what the tool did |
 |------|-----|------|
-| `Failure: the design is wrong` (+ the `Time: ... File: ...` line, on stdout) | `xvhdl --work=work tb_fatal.vhd && xelab -L work work.tb_fatal -s sim_fail && xsim sim_fail -R` (same through the drive) | a violated `assert ... severity failure` stops the check -- and **xsim EXITS 0**: the run exit is a lie, the line-start face is the only witness |
+| `Failure: the design is wrong` (+ the `Time: ... File: ...` line, on stdout) | `xvhdl --work=work tb_fatal.vhd && xelab -L work tb_fatal -s sim_fail && xsim sim_fail -R` (same through the drive) | a violated `assert ... severity failure` stops the check -- and **xsim EXITS 0**: the run exit is a lie, the line-start face is the only witness |
 | `Error: check failed` (+ the continuation `Note:` line, on stdout) | `xsim sim_err -R` on a `severity error` assert | the face prints, the simulation **continues** (`Note: continued past the error` follows), and **xsim still exits 0** -- the same lie; the face convicts |
 | `Note: sim done`, the kernel `INFO:` lines | `xsim sim_clean -R` on a passing testbench | the clean run exits 0 -- continuations, **never judged** |
 | `ERROR: [VRFC 10-4982] syntax error near 'end' [...:9]` (+ `ERROR: [VRFC 10-2989]`, then the `10-8704` ignored line, on **stdout**) | `xvhdl --work=work broken.vhd` (same through the drive, which joins the streams) | the compile-error face, **exit 1**; stderr is EMPTY on every stage-binary drive, error or clean; the compile gates on the exit and is never judged -- the uppercase face is deliberately outside the mixed-case vocabulary |
-| `ERROR: [VRFC 10-2987] 'top' is not compiled in library 'work'` | `xvhdl --work=work tb_clean.vhd top.vhd gate.vhd` (consumer before provider) | **order-sensitive within a library**, exit 1 -- the deferral loop's reason to exist here; even the tb-gate-top order fails (`gate` before `top` is required) |
-| `INFO: [VRFC 10-163] Analyzing VHDL file ".../pkg.vhd" into library grlib`, exit 0, and `xsim.dir/grlib/` appears in the cwd | `xvhdl --work=grlib pkg.vhd`, beside a `-work work` compile: `xsim.dir/` then holds `grlib/` and `work/` as siblings | **the library column's compile face**: `--work=<lib>` is accepted with the equals spelling, and every named library lands INSIDE the one `xsim.dir/` of the working directory -- so libraries compile in any order and the wholesale state wipe covers them all at once |
+| `ERROR: [VRFC 10-2987] 'top' is not compiled in library 'work'` | `xvhdl --work=work tb_clean.vhd top.vhd gate.vhd` (consumer before provider) | **order-sensitive within the work library**, exit 1 -- the deferral loop's reason to exist here; even the tb-gate-top order fails (`gate` before `top` is required) |
+| `INFO: [VRFC 10-163] Analyzing VHDL file ".../pkg.vhd" into library grlib`, exit 0, and `xsim.dir/grlib/` appears in the cwd | `xvhdl --work=grlib pkg.vhd`, beside a `-work work` compile: `xsim.dir/` then holds `grlib/` and `work/` as siblings | **the per-library compile face** (the 2026-11-07 argv, superseded on the sim compile by the 2026-11-08 single-work ruling): `--work=<lib>` is accepted with the equals spelling and lands the named library INSIDE the one `xsim.dir/` of the working directory -- the blueprint's libraries live on in the build face's `read_vhdl -library` reads and the sim face's `xsim.ini` mappings |
 | `INFO: [VRFC 10-2263] Analyzing Verilog file ...` , exit 0 | `xvlog vtop.v vgate.v` (consumer before provider) | **order-free** -- xvlog compiles in one invocation, no deferral loop; `-work work` pins the library (Verilog speaks no library clauses: the blueprint's library column has no xvlog face) |
-| `Compiling package grlib.grlib_pkg` ... `Built simulation snapshot tb`, exit 0; then `Note: SIM PASSED`, exit 0 | `xelab -L grlib -L work work.tb -s tb && xsim tb -R` (the package compiled into `--work=grlib`, the design and tb into `work`) | the library column's elaboration face: the top rides its own library's prefix (`work.tb`); the cross-library `library grlib;` clause resolves through the sibling `xsim.dir/grlib/` -- and the pure-VHDL faces need no `-L` at all (probed: `xelab work.tb -s tb` with NO `-L` anywhere builds and passes; the `-L` set is the Verilog and mixed-language face, per xelab's own help) |
+| `Compiling package grlib.grlib_pkg` ... `Built simulation snapshot tb`, exit 0; then `Note: SIM PASSED`, exit 0 | `xelab -L grlib -L work work.tb -s tb && xsim tb -R` (the package compiled into `--work=grlib`, the design and tb into `work`) | the per-library era's elaboration face (superseded by the single-work ruling): the top rode its own library's prefix (`work.tb`); the cross-library `library grlib;` clause resolved through the sibling `xsim.dir/grlib/` -- and the pure-VHDL faces needed no `-L` at all (probed: `xelab work.tb -s tb` with NO `-L` anywhere builds and passes; the `-L` set is the Verilog and mixed-language face, per xelab's own help) |
 | exit 0, `Built simulation snapshot tb2` | `xelab -L grlib -L work grlib.tb -s tb` with EVERYTHING compiled into `--work=grlib` (`xsim.dir/` holds no `work/` at all), and `xelab -L grlib -L nosuchlib grlib.tb -s tb` | the single-library collapse: an explicit non-`work` prefix works, and a `-L` naming an absent library is accepted **silently** -- over-naming costs nothing |
-| `ERROR: [XSIM 43-3225] Cannot find design unit work.tb in library work located at xsim.dir/work.` -- the refusal names the IMPLICIT `work.` prefix | `xelab -L work -L grlib tb -s tb` (bare) with EVERYTHING compiled into `--work=grlib`; same under `-L grlib -L work` | **the bare top is work-only**: a bare design unit is implicitly `work.`-qualified and resolves in the work library alone -- why the drive pins `<the top's library>.<top>` (only the prefix reaches a top in a named library, the shape every real orbit target carries) |
+| `ERROR: [XSIM 43-3225] Cannot find design unit work.tb in library work located at xsim.dir/work.` -- the refusal names the IMPLICIT `work.` prefix | `xelab -L work -L grlib tb -s tb` (bare) with EVERYTHING compiled into `--work=grlib`; same under `-L grlib -L work` | **the bare top is work-only**: a bare design unit is implicitly `work.`-qualified and resolves in the work library alone -- why the per-library era pinned the prefix, and why the single-work ruling makes the bare top the natural face (everything IS in work) |
 | `Note: SIM PASSED`, exit 0 | `xelab -L work -L grlib work.tb -s tb` AND the bare `xelab -L work -L grlib tb -s tb`, on a tb in `work` whose component declaration (in the grlib package) and entity BOTH live in `--work=grlib` | **the binding rule is the component's own library**: a default component binding (no binding indication) searches the component declaration's library -- it binds under the bare and the qualified top ALIKE; the top's form is binding-neutral (the multi-library drive live-pins this through its own component fixture) |
-| `WARNING: [VRFC 10-4940] 'gate' remains a black box since it has no binding entity [...:11]`, snapshot built, the run fails downstream | the same tb shape with the component declared in the `work` tb and the entity compiled into `--work=grlib` -- under the qualified top, the bare top, with `-L`, with `-relax`, and in either `-L` order | **the multi-library wall**: a default binding CANNOT cross libraries, and no xelab flag extends the search -- designs relying on it (the GRLIB style; GRLIB's own sim flows map every library into one) ride explicit `entity <lib>.<name>` bindings or a single-library blueprint (the sibling hdlm drive's single-`work` wall is what passes the zedboard systest there) |
-| `ERROR: [XSIM 43-3225] Cannot find design unit work.tb_nosuch in library work located at xsim.dir/work.` | `xelab -L work work.tb_nosuch -s sim_nosuch` | the elaboration refusal of an unknown top, **exit 1** -- honest, the elaboration gates on the exit |
+| `WARNING: [VRFC 10-4940] 'gate' remains a black box since it has no binding entity [...:11]`, snapshot built, the run fails downstream | the same tb shape with the component declared in the `work` tb and the entity compiled into `--work=grlib` -- under the qualified top, the bare top, with `-L`, with `-relax`, in either `-L` order, AND through an `xsim.ini`-mapped alias | **the multi-library wall**: a default binding CANNOT cross libraries, no xelab flag extends the search, and the mapped-alias merge does not lift it -- designs relying on it (the GRLIB style; GRLIB's own sim flows keep one physical library) merge into `work` by the single-work ruling |
+| `ERROR: [XSIM 43-3225] Cannot find design unit work.tb_nosuch in library work located at xsim.dir/work.` | `xelab -L work tb_nosuch -s sim_nosuch` | the elaboration refusal of an unknown top, **exit 1** -- honest, the elaboration gates on the exit |
 | `ERROR: Please check the snapshot name ... does not exist` | `xsim nosuch_snap -R` | the missing-snapshot face, **exit 1** -- the crash door; uppercase, outside the vocabulary, the exit convicts |
 | `SYNTH FAILED: ERROR: [Common 17-69] Command failed: Vivado Synthesis failed`, **exit 1** | `vivado -mode batch -nojournal -nolog -source synth.tcl` with a syntax-broken `read_vhdl` inside the catch-guard | the fail-fast batch face: the return-code catch-guard stops the script and exits 1 (unguarded batch **continues past a failed synth_design**, probed) |
 | **exit 1 with all three netlists written** | the same script whose guard tested `$synth_err` emptiness instead of catch's return code | **the probed Tcl trap**: `catch {script} var` writes the script's NORMAL RETURN VALUE into `var`, and `write_verilog`/`write_checkpoint` return the written filename -- an emptiness guard false-fails a CLEAN synth |
 | exit 0, `netlists/top.dcp` + `top.v` + `top.edf` written | `vivado -mode batch -nojournal -nolog -source synth.tcl`, guard on catch's return code, `synth_design -top top -part xc7z010clg400-1 -mode out_of_context` | the clean synth face; the echo of the sourced commands rides stdout, the synth errors ride **stderr**, exit honest |
 | exit 0, the netlists written, a TWO-library closure (`read_vhdl -library grlib ./pkg.vhd` + `read_vhdl -library work ./gate.vhd` + `read_vhdl -library work ./tb.vhd` in the sourced script) | the generated script driven through `vivado-build` (`cargo test -- --ignored`, the gated harness) | **the library column's script face**: each VHDL read names the file's own library -- the compile's mirror, the GRLIB flow's own shape (probed in hdlm's vivado arc); `synth_design -top` finds the top across the named libraries unchanged |
+| the tb carrying `library grlib; use grlib.grlib_pkg.all;` compiles clean into `work`; the SAME source without the mapping dies on the dangling clause | cwd `xsim.ini` carrying `grlib=xsim.dir/work`, then `xvhdl --work=work tb.vhd` (the drive writes it per drive; `ieee`/`std` still resolve beside the partial ini) | **the mapped-library face** (the GRLIB `vmap` convention -- many logical names, one physical library): the single-work compile's clause resolution, the drive's own two-library live fixture riding it |
+| `Note: SIM PASSED`, exit 0, a TWO-library blueprint | `xvhdl --work=work tb.vhd` / `--work=work gate.vhd` / `--work=work pkg.vhd` (one invocation per file, blueprint order, `xsim.ini` mapping `grlib`) then `xelab -L work tb -s tb && xsim tb -R` -- the drive's own gated live fixture | **the single-work sim face** (the 2026-11-08 ruling): everything merges into one physical library, the direct `entity work.gate` reference resolves inside it, the bare top is its natural reading, the deferral loop unchanged |
 | `-version` exits 0 on every family binary | `vivado -version`, `xvhdl -version`, `xvlog -version`, `xelab -version`, `xsim -version` | the identity face (single dash), the drive's spawnability probe |
 
 vivado's run vocabulary is line-start mixed-case and case-exact: an
@@ -1014,8 +977,8 @@ vocabulary, never this one.
     stale database could make a re-drive incremental; the first probed
     re-drive decides whether the wipe list grows.
 - **The library column is load-bearing on the VHDL drives and on
-  vivado; carried on the rest.** The nvc drive consumes the blueprint's
-  library column verbatim -- every file analyzed into
+  vivado's BUILD face; carried on the rest.** The nvc drive consumes the
+  blueprint's library column verbatim -- every file analyzed into
   `--work=<entry.library>` (the §25 multi-library face, probed live on
   nvc 1.23.0, 2026-11-07), every spawn carrying `-L .`, the wipe taking
   every `_NVC_LIB`-marked directory, and the elaborate/run argv pinning
@@ -1025,21 +988,26 @@ vocabulary, never this one.
   live on ghdl 6.0.0, the same day): per-file `--work=`, the
   cwd-sibling `-obj08.cf` files doing the resolution no search flag
   needed, the wipe taking every `<library>-obj08.cf`, and the same
-  three-voice ladder on the elaborate/run argv. The vivado drive
-  consumes it on BOTH faces (probed live on Vivado 2025.2.1, the same
-  day): every xvhdl ride into `--work=<entry.library>`, xelab carrying
-  one `-L` per distinct library and naming the top under the same
-  three-voice ladder, and the generated script's `read_vhdl -library`
-  lines reading each file back out of its own library -- while the
-  Verilog legs stay single-library (`xvlog -work work`, `read_verilog`
-  plain: Verilog speaks no library clauses, documented). One wall rides
-  with the vivado sim face (probed 2026-11-08): a VHDL default component
-  binding searches the component declaration's own library only, so a
-  closure whose component declarations and entities live in different
-  libraries black-boxes at elaboration (the 10-4940 face, exit 1) --
-  the GRLIB-style designs that need cross-library default binding stay
-  single-library on xsim; explicit `entity <lib>.<name>` bindings
-  simulate multi-library. Every OTHER
+  three-voice ladder on the elaborate/run argv. The vivado drive's
+  column rides where its engines serve it (the owner's 2026-11-08
+  ruling): the BUILD face's generated script reads each VHDL file back
+  out of its own row's library (`read_vhdl -library <entry.library>` --
+  synthesis binds cross-library fine, probed through the drive's
+  two-library synth), while the SIM face is SINGLE-WORK -- xsim's
+  default component binding is LRM-strict (it searches the component
+  declaration's own library alone) and argv-incurable (probed
+  exhaustively: no `-L`, `-relax`, order, or mapping lifts it), so the
+  ruling merges every file into one `work` library with the mapped
+  `xsim.ini` carrying the blueprint's named libraries for clause
+  resolution -- the same single-physical-library convention GRLIB's own
+  xsim flows use. The Verilog legs stay single-library at every face
+  (`xvlog -work work`, `read_verilog` plain: Verilog speaks no library
+  clauses, documented). One wall rides with the vivado sim face (probed
+  2026-11-08): the merge resolves CLAUSES, not default component
+  bindings -- a component reached through a mapped alias still
+  black-boxes at elaboration (the 10-4940 face, exit 1); designs that
+  need cross-library default components ride explicit `entity <lib>.<name>`
+  instantiations written against the merged library. Every OTHER
   drive still maps nothing: iverilog compiles into its one snapshot,
   verilator lints and builds one fileset, and the quartus faces compile
   their filesets as given (`VHDL_FILE` / `VERILOG_FILE` lines, no
@@ -1063,9 +1031,10 @@ vocabulary, never this one.
   whole-per-library set, the name lowercased by ghdl; iverilog's
   snapshot; verilator's
   `obj_dir`; yosys's `netlists/`; vivado's `xsim.dir/` -- the WHOLE
-  state directory, which on a multi-library blueprint is the whole
-  per-library set for free, because vivado nests every named library
-  inside that one directory -- and, on the build face, its
+  state directory, the merged work library and the snapshots together,
+  plus the `xsim.ini` mapped-library file (regenerated per drive, so a
+  library a previous blueprint mapped cannot leak into this one) -- and,
+  on the build face, its
   `netlists/`; the quartus sim face's `work/` +
   `modelsim.ini`, DOCUMENTED-ONLY; cocotb's `sim_build/`). A large
   design pays a full re-analysis per drive; correctness before
@@ -1076,10 +1045,7 @@ vocabulary, never this one.
   not stay resolvable; nvc's
   is load-bearing on a multi-library blueprint for the same reason, even
   though
-  nvc itself tolerates re-analysis in a stale library; vivado's is
-  load-bearing on a multi-library blueprint for the same reason -- the
-  wholesale `xsim.dir/` wipe takes every named library with it, so no
-  stale unit stays resolvable; iverilog's
+  nvc itself tolerates re-analysis in a stale library; iverilog's
   snapshot cannot be run past a
   failed compile, verilator's `--build` regenerates its intermediates, a
   failed yosys synth exits before its netlist could be mistaken for

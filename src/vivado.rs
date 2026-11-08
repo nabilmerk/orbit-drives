@@ -8,19 +8,19 @@
 //! The drive reads the blueprint orbit wrote for the target (the TSV
 //! plan) and carries BOTH languages: VHDL entries compile through
 //! `xvhdl`, `VLOG`/`SYSV` entries through `xvlog` -- vivado is the one
-//! carried tool that speaks both. It also consumes the blueprint's
-//! library column (the §25 multi-library face, probed live on Vivado
-//! 2025.2.1): every xvhdl ride compiles into `--work=<entry.library>`,
-//! xelab names the top under its own library's prefix
-//! (`<the top's library>.<top>`, the ladder of [`top_library`] -- the
-//! prefix is REACHABILITY, not binding: the bare top resolves in `work`
-//! only, probed, and the top's form provably does not steer xelab's
-//! default component binding, see [`library_search_args`]), and the
-//! generated script reads each VHDL file back with
-//! `read_vhdl -library <entry.library>`. The Verilog legs carry no
-//! library column: Verilog speaks no library clauses, so xvlog lands
-//! every Verilog file in [`WORK`] and the script's `read_verilog` lines
-//! stay plain.
+//! carried tool that speaks both. The blueprint's library column rides
+//! the BUILD face only: the generated script reads each VHDL file back
+//! with `read_vhdl -library <entry.library>` (synthesis binds
+//! cross-library fine, probed). The SIM face rides SINGLE-WORK by the
+//! owner's ruling (2026-11-08): every file -- VHDL and Verilog alike --
+//! compiles into [`WORK`], the drive writes a cwd `xsim.ini` mapping
+//! each distinct blueprint library to the one physical library (the
+//! GRLIB `vmap` convention, so the sources' `library <other>;` clauses
+//! resolve), and xelab rides the BARE top (a bare design unit is
+//! implicitly `work.`-qualified, and everything IS in `work`). The
+//! Verilog legs carry no library column at any face: Verilog speaks no
+//! library clauses, so xvlog lands every Verilog file in [`WORK`] and
+//! the script's `read_verilog` lines stay plain.
 //!
 //! The compile: xvhdl is order-sensitive within a library
 //! (`ERROR: [VRFC 10-2987] 'top' is not compiled in library 'work'`,
@@ -108,41 +108,47 @@ pub const XVLOG_BIN: &str = "xvlog";
 pub const XELAB_BIN: &str = "xelab";
 pub const XSIM_BIN: &str = "xsim";
 
-/// xvlog's one destination library (`-work work`), and the drive's last
-/// resort when it must name the library that holds the top: see
-/// [`top_library`]. Verilog speaks no library clauses, so the blueprint's
-/// library column has no xvlog face -- every Verilog file lands here,
-/// documented. VHDL files do NOT land here: each xvhdl ride compiles
-/// into the library its own blueprint row declares.
+/// The ONE library the sim face compiles everything into (`xvhdl
+/// --work=work`, `xvlog -work work`), by the owner's single-work ruling
+/// (2026-11-08). It is also the xelab design unit's home: the bare top
+/// is implicitly `work.`-qualified, and everything IS in `work`.
+/// Verilog speaks no library clauses -- every Verilog file lands here at
+/// any face. The blueprint's library column has no compile face on the
+/// sim side (the single-work ruling); it rides the BUILD face's
+/// generated script (`read_vhdl -library <entry.library>`) and the sim
+/// face's [`XSIM_INI`] mappings.
 pub const WORK: &str = "work";
 
-/// The env var orbit sets on every spawned target
-/// (`ORBIT_PROJECT_LIBRARY`): the working project's HDL library name --
-/// the same name orbit's planner writes into the blueprint's library
-/// column for the project's own files, which is where the designated
-/// testbench lives. The planner's voice, not the drive's guess: orbit
-/// defaults a project's library to the project's NAME, so under orbit
-/// this is generally NOT vivado's [`WORK`].
-pub const PROJECT_LIBRARY_ENV: &str = "ORBIT_PROJECT_LIBRARY";
+/// The mapped-library face of the sim drive: the cwd `xsim.ini` the
+/// drive writes when the blueprint names libraries beyond [`WORK`] --
+/// one `<library>=xsim.dir/work` line per distinct blueprint library
+/// (the GRLIB `vmap` convention: many logical names, one physical
+/// library), so a source's `library <other>; use <other>.<pkg>.all;`
+/// clauses resolve against the merged library (probed live on 2025.2.1:
+/// with the mapping the clause compiles; without it the same source
+/// dies on the dangling clause; the tool's own std/ieee defaults stay
+/// intact beside the partial ini). Like the quartus sim face's
+/// `modelsim.ini`, this file is the drive's state: the stale one dies
+/// with the wipe and a fresh one is written per drive, so a library a
+/// previous blueprint mapped cannot leak into this one. HONEST LIMIT
+/// (probed): the mapping resolves CLAUSES, not default component
+/// bindings -- a component reached through a mapped alias still
+/// black-boxes at elaboration (the 10-4940 face); designs relying on
+/// cross-library default binding stay outside the sim face's reach
+/// (see the README's honest limits).
+pub const XSIM_INI: &str = "xsim.ini";
 
-/// The xsim state directory: EVERY compiled library
-/// (`xsim.dir/<library>/` -- one subdirectory per named library, all
-/// inside the one state directory of the working directory, probed live:
-/// `--work=grlib` and `-work work` land as siblings under the same
-/// `xsim.dir/`) AND the per-top snapshots land under it. It is vivado's
-/// clock.
+/// The xsim state directory: the compiled [`WORK`] library AND the
+/// per-top snapshots land under it. It is vivado's clock.
 ///
 /// Orbit's output directory persists across runs, and the drive wipes it
 /// before every drive -- the same correctness-before-incrementality
 /// stance as the work libraries. The wipe is WHOLESALE (the whole
-/// `xsim.dir/`), which on a multi-library blueprint is what keeps it
-/// honest: a library a previous drive analyzed but this blueprint no
-/// longer names dies with the directory, so no stale unit stays
-/// resolvable -- the same stance as the ghdl and nvc scans, here for
-/// free because vivado's own layout nests every library in one state
-/// directory. Probed honestly: the wipe is otherwise symmetry -- a
-/// failed compile or elaboration exits 1 before the sim face could run
-/// a stale snapshot.
+/// `xsim.dir/`), so no stale unit stays resolvable; on the single-work
+/// face there are no sibling library directories to scan for -- the
+/// merged compile keeps every unit under the one directory. Probed
+/// honestly: the wipe is otherwise symmetry -- a failed compile or
+/// elaboration exits 1 before the sim face could run a stale snapshot.
 pub const XSIM_DIR: &str = "xsim.dir";
 
 /// The netlist directory the build face writes every top into
@@ -538,14 +544,26 @@ pub fn drive(request: &Drive, mode: Mode) -> Result<(), DriveError> {
         Mode::Sim => None,
     };
 
-    // Run-scoped state: see `XSIM_DIR`. Both faces wipe the whole state
-    // directory -- it holds EVERY compiled library (`xsim.dir/<library>/`,
-    // one subdirectory per named library) AND the snapshots, so the
-    // wholesale wipe is the multi-library face's wipe too -- and the
-    // build face resets its payload directory as well (probed honestly:
-    // the build face's wipe is symmetry; the state wipe is
-    // load-bearing on a multi-library blueprint, where a library this
-    // blueprint no longer names must not stay resolvable).
+    // Run-scoped state: see `XSIM_DIR` and `XSIM_INI`. Both faces wipe
+    // the whole state directory (the merged work library AND the
+    // snapshots) and the stale mapped-library file -- the build face
+    // resets its payload directory as well (probed honestly: the
+    // build face's wipe is symmetry; a failed compile or elaboration
+    // exits before anything stale could be mistaken for fresh).
+    if let Err(e) = fs::remove_dir_all(XSIM_DIR) {
+        if e.kind() != std::io::ErrorKind::NotFound {
+            let message = format!("cannot wipe the stale state directory {XSIM_DIR}/: {e}");
+            eprintln!("orbit-drives: vivado: error: {message}");
+            return Err(DriveError::Library(message));
+        }
+    }
+    if let Err(e) = fs::remove_file(XSIM_INI) {
+        if e.kind() != std::io::ErrorKind::NotFound {
+            let message = format!("cannot wipe the stale mapped-library file {XSIM_INI}: {e}");
+            eprintln!("orbit-drives: vivado: error: {message}");
+            return Err(DriveError::Library(message));
+        }
+    }
     if let Err(e) = fs::remove_dir_all(XSIM_DIR) {
         if e.kind() != std::io::ErrorKind::NotFound {
             let message = format!("cannot wipe the stale state directory {XSIM_DIR}/: {e}");
@@ -596,25 +614,34 @@ pub fn drive(request: &Drive, mode: Mode) -> Result<(), DriveError> {
         DriveError::NotCarried(e)
     })?;
 
-    // The compile: xvhdl first (order-sensitive within a library,
-    // probed -- the deferral loop, each file into its own blueprint
-    // library), then xvlog (order-free, one invocation into `work`,
-    // probed). Both gate on the honest exit; no std flag is pinned (the
-    // tool default compiles GRLIB-scale designs green; `--2008` breaks
-    // them, probed live).
-    compile_vhdl(&vhdl, &xvhdl, &vivado)?;
+    // The mapped-library face: one ini line per distinct blueprint
+    // library beyond `work`, so the sources' `library <other>;` clauses
+    // resolve against the merged library (see `XSIM_INI`). A blueprint
+    // that names no other library writes no file.
+    let map_lines = library_map_lines(&vhdl);
+    if !map_lines.is_empty() {
+        let ini = map_lines.join("\n") + "\n";
+        if let Err(e) = fs::write(XSIM_INI, &ini) {
+            let message = format!("cannot write the mapped-library file {XSIM_INI}: {e}");
+            eprintln!("orbit-drives: vivado: error: {message}");
+            return Err(DriveError::Library(message));
+        }
+    }
+
+    // The compile: xvhdl first (order-sensitive within the work library,
+    // probed -- the deferral loop), then xvlog (order-free, one
+    // invocation, probed). Both gate on the honest exit; no std flag is
+    // pinned (the tool default compiles GRLIB-scale designs green;
+    // `--2008` breaks them, probed live).
+    let paths: Vec<PathBuf> = vhdl.iter().map(|entry| entry.path.clone()).collect();
+    compile_vhdl(&paths, &xvhdl, &vivado)?;
     compile_verilog(&verilog, &xvlog, &vivado)?;
     println!(
-        "orbit-drives: vivado: {label}: compiled {} VHDL file(s) into their blueprint libraries \
-         and {} Verilog file(s) into {WORK} (v1 carries no std flag: the tool default)",
+        "orbit-drives: vivado: {label}: compiled {} VHDL and {} Verilog file(s) into {WORK} \
+         (the single-work sim face, v1 carries no std flag: the tool default)",
         vhdl.len(),
         verilog.len()
     );
-
-    // The library that holds the tops -- the design-unit prefix on the
-    // xelab argv. See `top_library`. Resolved once -- it does not vary
-    // per top.
-    let top_library = top_library(std::env::var(PROJECT_LIBRARY_ENV).ok().as_deref(), &vhdl);
 
     let mut findings = Vec::new();
     for top in &request.tops {
@@ -664,28 +691,20 @@ pub fn drive(request: &Drive, mode: Mode) -> Result<(), DriveError> {
                 );
             }
             Mode::Sim => {
-                println!("orbit-drives: vivado: {label}: elaborating {top} from {top_library}");
-                // The top rides its own library's prefix
-                // (`<the top's library>.<top>`) -- the pin is load-bearing
-                // for REACHABILITY: the bare top resolves in `work` only
-                // (probed: a top compiled into a named library answers
-                // `ERROR: [XSIM 43-3225] Cannot find design unit
-                // work.<top> in library work` -- xelab's own error names
-                // the implicit `work.` prefix). The one `-L <lib>` per
-                // carried library makes each library visible to the
+                println!("orbit-drives: vivado: {label}: elaborating {top} from {WORK}");
+                // The BARE top (the single-work face: a bare design unit
+                // is implicitly `work.`-qualified, and everything IS in
+                // `work` -- probed); the `-L work` pin stays for the
                 // VERILOG and mixed-language binding face (xelab's own
                 // `-L` help: "search libraries for the instantiated
-                // design units in a Verilog or Mixed language design");
-                // the pure-VHDL faces need none of it -- the `library
-                // <other>;` clauses resolve against the sibling
-                // `xsim.dir/<other>/` directories automatically, and
-                // default component binding searches the component
-                // declaration's own library (see `library_search_args`).
-                // The snapshot lands as `xsim.dir/<top>` and is validated
-                // by elaboration (an unknown top answers the same 43-3225
-                // refusal, exit 1, probed).
+                // design units in a Verilog or Mixed language design" --
+                // harmless for the pure-VHDL faces, probed, which need
+                // nothing). The snapshot lands as `xsim.dir/<top>` and is
+                // validated by elaboration (an unknown top answers
+                // `ERROR: [XSIM 43-3225] Cannot find design unit ...`,
+                // exit 1, probed).
                 let mut elaborate = Command::new(&xelab);
-                elaborate.args(elaborate_args(&vhdl, &top_library, top));
+                elaborate.args(elaborate_args(top));
                 Recipe::from_env().apply_to(&mut elaborate, &vivado);
                 let output = capture(XELAB_BIN, &mut elaborate).map_err(DriveError::Spawn)?;
                 let log = join_log(lossy(&output.stdout), lossy(&output.stderr));
@@ -732,23 +751,26 @@ pub fn drive(request: &Drive, mode: Mode) -> Result<(), DriveError> {
     }
 }
 
-/// Compile the VHDL entries in blueprint order, ONE xvhdl invocation per
-/// file, through the deferral loop: xvhdl is order-sensitive within a
-/// library (`ERROR: [VRFC 10-2987] 'top' is not compiled in library
+/// Compile the VHDL files in blueprint order, ONE xvhdl invocation per
+/// file, through the deferral loop: xvhdl is order-sensitive within the
+/// work library (`ERROR: [VRFC 10-2987] 'top' is not compiled in library
 /// 'work'`, exit 1, probed live on 2025.2.1), so a failing file defers to
 /// a retry after the others; a pass that makes no progress stops the
-/// loop. Each file compiles into the library its own blueprint row
-/// declares (`xvhdl --work=<entry.library> <file>`, the §25 multi-library
-/// face, probed live on Vivado 2025.2.1: the named library lands as
-/// `xsim.dir/<library>/` inside the one state directory), so
-/// cross-library references defer across libraries exactly as they defer
-/// within one. The faces land on STDOUT (stderr is empty on every
-/// stage-binary drive, probed), so the residual logs carry the joined
-/// streams. The step gates on the exit and is never judged: the compile
-/// exits are honest, and the uppercase `ERROR:` faces are deliberately
-/// outside the `Vivado` vocabulary.
-fn compile_vhdl(entries: &[Entry], xvhdl: &Path, vivado: &Path) -> Result<(), DriveError> {
-    if entries.is_empty() {
+/// loop. EVERY file compiles into [`WORK`] (`xvhdl --work=work <file>`,
+/// the explicit pin -- never the bare default) -- the single-work sim
+/// face by the owner's ruling (2026-11-08): the blueprint's library
+/// column has no compile face here, the sources' `library <other>;`
+/// clauses resolve through the [`XSIM_INI`] mappings the drive wrote
+/// before this step, and a source naming a library the blueprint does
+/// not carry fails loudly here (the dangling-clause face), never
+/// silently. Cross-references defer exactly as they did per-library: the
+/// loop is per-file and unchanged. The faces land on STDOUT (stderr is
+/// empty on every stage-binary drive, probed), so the residual logs
+/// carry the joined streams. The step gates on the exit and is never
+/// judged: the compile exits are honest, and the uppercase `ERROR:` faces
+/// are deliberately outside the `Vivado` vocabulary.
+fn compile_vhdl(files: &[PathBuf], xvhdl: &Path, vivado: &Path) -> Result<(), DriveError> {
+    if files.is_empty() {
         return Ok(());
     }
     let mut probe = Command::new(xvhdl);
@@ -758,24 +780,13 @@ fn compile_vhdl(entries: &[Entry], xvhdl: &Path, vivado: &Path) -> Result<(), Dr
 
     println!(
         "orbit-drives: vivado: compiling {} VHDL file(s) in blueprint order with the \
-         deferral loop (order-sensitive within a library, probed live 2026-11-07)",
-        entries.len()
+         deferral loop (order-sensitive within {WORK}, probed live 2026-11-07)",
+        files.len()
     );
     let recipe = Recipe::from_env();
-    let paths: Vec<PathBuf> = entries.iter().map(|entry| entry.path.clone()).collect();
-    let report = analyze_with_deferral(&paths, |file| {
-        // Each file compiles into the library its own blueprint row
-        // declares -- the §25 face, the column consumed verbatim. The
-        // deferral loop hands back exactly the paths it was given, and
-        // those came from these entries: the lookup cannot miss.
-        let library = entries
-            .iter()
-            .find(|entry| entry.path == file)
-            .expect("the deferral loop hands back the blueprint's own paths")
-            .library
-            .clone();
+    let report = analyze_with_deferral(files, |file| {
         let mut compile = Command::new(xvhdl);
-        compile.arg(format!("--work={library}")).arg(file);
+        compile.arg(format!("--work={WORK}")).arg(file);
         recipe.apply_to(&mut compile, vivado);
         match capture(XVHDL_BIN, &mut compile) {
             Ok(output) if output.status.success() => Ok(()),
@@ -854,134 +865,47 @@ fn compile_verilog(files: &[PathBuf], xvlog: &Path, vivado: &Path) -> Result<(),
     })
 }
 
-/// The library that holds the tops -- the design-unit prefix on the
-/// xelab argv.
-///
-/// xelab resolves a design unit as `<library>.<unit>`, and the drive's
-/// old unconditional `work.` prefix named a library the blueprint's rows
-/// need not populate any more: a testbench compiled into
-/// `--work=grlib` is `grlib.<top>`, and `work.<top>` answers xelab's
-/// `ERROR: [XSIM 43-3225] Cannot find design unit ...` refusal (exit 1,
-/// probed). The prefix must be the top's library -- and it must stay a
-/// prefix: the BARE top is not an alternative, probed live on 2025.2.1
-/// (2026-11-08) -- a bare name is implicitly `work.`-qualified and
-/// resolves in the work library ONLY (`xelab -L work -L grlib tb` with
-/// everything compiled into `--work=grlib` answers `ERROR: [XSIM
-/// 43-3225] Cannot find design unit work.tb in library work`; xelab's
-/// own refusal names the implicit prefix). So the resolution is the
-/// ladder the ghdl and nvc drives carry, loudest voice first:
-///
-/// 1. `$ORBIT_PROJECT_LIBRARY` -- orbit's own voice. The planner sets it
-///    on every spawned target to the working project's HDL library, and
-///    the designated testbench is a working-project file, so under orbit
-///    this is always the right answer (and generally NOT `work`: orbit
-///    defaults a project's library to the project's NAME). An empty
-///    value counts as absent -- the `$ORBIT_TB_NAME` stance.
-/// 2. The blueprint's single carried VHDL library -- direct invocation
-///    without orbit: when every VHDL row declares the same library, the
-///    top is necessarily in it. (Verilog rows are outside this voice on
-///    purpose: Verilog has no libraries -- xvlog lands every Verilog
-///    file in `work` -- so a Verilog top under a VHDL-only-ladder
-///    mis-targets only in the mixed direct-invocation case, where it
-///    dies loudly on xelab's design-unit refusal, never silently.)
-/// 3. vivado's default [`WORK`] -- the leftover case (several VHDL
-///    libraries, no env): a guess, but a SAFE one. The drive wipes the
-///    whole `xsim.dir/` first, so `work` cannot hold a stale unit; a
-///    wrong guess dies loudly on xelab's own design-unit refusal --
-///    never a silent degradation.
-///
-/// The prefix is REACHABILITY only. It neither causes nor cures xelab's
-/// default component binding: probed live on 2025.2.1 (2026-11-08), a
-/// VHDL default binding (a component instance with no binding
-/// indication) searches the library the COMPONENT DECLARATION lives in
-/// -- a component and its entity co-located in any carried library bind
-/// under the bare and the qualified top alike, and a component whose
-/// entity sits in another library black-boxes
-/// (`WARNING: [VRFC 10-4940] ... remains a black box`) under both --
-/// see [`library_search_args`] and the README's honest limits.
-fn top_library(project_library: Option<&str>, entries: &[Entry]) -> String {
-    match project_library {
-        Some(library) if !library.is_empty() => library.to_string(),
-        _ => {
-            let mut distinct: Vec<&str> =
-                entries.iter().map(|entry| entry.library.as_str()).collect();
-            distinct.sort_unstable();
-            distinct.dedup();
-            match distinct.as_slice() {
-                [only] => (*only).to_string(),
-                _ => WORK.to_string(),
-            }
-        }
-    }
-}
-
-/// The `-L <lib>` pins of the xelab argv: one per DISTINCT library the
-/// blueprint's VHDL rows declare (first-occurrence order), then
-/// [`WORK`] (the Verilog files' one home, and the VHDL `work.` selected
-/// name's target), then the ladder-resolved top library if neither
-/// carried it. xelab tolerates a `-L` naming a library that holds
-/// nothing (probed: an absent library's `-L` is accepted, exit 0) -- so
-/// over-naming costs nothing.
-///
-/// What `-L` does NOT do is steer VHDL binding -- and this drive never
-/// claims it does. The probed faces (2025.2.1, 2026-11-08):
-///
-/// - xelab's own `-L` help: "Specify search libraries for the
-///   instantiated design units in a **Verilog or Mixed language**
-///   design." The pure-VHDL faces need none of it: a `library <other>;`
-///   clause resolves against the sibling `xsim.dir/<other>/` directories
-///   automatically (probed: the whole two-library drive elaborates and
-///   passes with the `-L` set stripped), and the design-unit prefix
-///   names the top's library explicitly.
-/// - A VHDL DEFAULT component binding (a component instance with no
-///   binding indication) searches the library the COMPONENT DECLARATION
-///   lives in, and nothing else. Component and entity co-located in any
-///   one carried library bind under the bare and the qualified top
-///   alike (probed both ways: `SIM PASSED`); a component whose entity
-///   sits in a DIFFERENT library black-boxes -- `WARNING: [VRFC 10-4940]
-///   '<unit>' remains a black box since it has no binding entity` --
-///   under both, with `-L` on the argv, `-relax` on the argv, and in
-///   either `-L` order (probed exhaustively; no xelab flag extends the
-///   search -- the help carries no binding option at all). That wall is
-///   the honest limit of the §25 multi-library sim face: designs
-///   relying on cross-library default binding (the GRLIB style, whose
-///   own sim flows map every library into one) fail loudly on the
-///   10-4940 face and need explicit `entity <lib>.<name>` bindings to
-///   simulate multi-library -- see the README's honest limits.
-fn library_search_args(entries: &[Entry], top_library: &str) -> Vec<String> {
-    let mut libraries: Vec<String> = Vec::new();
+/// The mapped-library lines of the sim face's [`XSIM_INI`]: one
+/// `<library>=xsim.dir/work` line per DISTINCT blueprint VHDL library
+/// beyond [`WORK`] (first-occurrence order; `work` never maps to
+/// itself). The GRLIB `vmap` convention -- many logical names, one
+/// physical library -- the only face that lets a multi-library
+/// blueprint's `library <other>; use <other>.<pkg>.all;` clauses resolve
+/// under the merged compile (probed live on 2025.2.1, 2026-11-08: with
+/// the mapping the clause compiles; without it the same source dies on
+/// the dangling clause; the tool's std/ieee defaults stay intact beside
+/// the partial ini).
+fn library_map_lines(entries: &[Entry]) -> Vec<String> {
+    let mut lines: Vec<String> = Vec::new();
+    let mut seen: Vec<String> = Vec::new();
     for entry in entries {
         let library = entry.library.clone();
-        if !libraries.contains(&library) {
-            libraries.push(library);
+        if library != WORK && !seen.contains(&library) {
+            seen.push(library.clone());
+            lines.push(format!("{library}={XSIM_DIR}/{WORK}"));
         }
     }
-    for extra in [WORK.to_string(), top_library.to_string()] {
-        if !libraries.contains(&extra) {
-            libraries.push(extra);
-        }
-    }
-    let mut args = Vec::with_capacity(libraries.len() * 2);
-    for library in libraries {
-        args.push("-L".to_string());
-        args.push(library);
-    }
-    args
+    lines
 }
 
-/// The design arguments of the xelab argv: the [`library_search_args`]
-/// set, then the top under its own library's prefix
-/// (`<the top's library>.<top>` -- the BARE top is not an alternative:
-/// it is implicitly `work.`-qualified and resolves in the work library
-/// only, probed live, see [`top_library`]), then `-s <top>` -- the
-/// snapshot keeps the top's own name, which the run argv
-/// (`xsim <top> -R`) and the missing-snapshot crash door key on.
-fn elaborate_args(entries: &[Entry], top_library: &str, top: &str) -> Vec<String> {
-    let mut args = library_search_args(entries, top_library);
-    args.push(format!("{top_library}.{top}"));
-    args.push("-s".to_string());
-    args.push(top.to_string());
-    args
+/// The design arguments of the xelab argv: the `-L work` pin, the BARE
+/// top (the single-work face: a bare design unit is implicitly
+/// `work.`-qualified, and everything IS in `work` -- the qualification
+/// the pre-ruling argv carried is gone with the per-library compile),
+/// then `-s <top>` -- the snapshot keeps the top's own name, which the
+/// run argv (`xsim <top> -R`) and the missing-snapshot crash door key
+/// on. The `-L work` pin stays for the VERILOG and mixed-language
+/// binding face (xelab's own `-L` help: "search libraries for the
+/// instantiated design units in a Verilog or Mixed language design") --
+/// harmless for the pure-VHDL faces, probed, which need nothing.
+fn elaborate_args(top: &str) -> Vec<String> {
+    vec![
+        "-L".to_string(),
+        WORK.to_string(),
+        top.to_string(),
+        "-s".to_string(),
+        top.to_string(),
+    ]
 }
 
 /// Run one elaborated snapshot and capture its log:
@@ -1259,133 +1183,56 @@ ERROR: Please check the snapshot name which is created during 'xelab',the curren
     }
 
     #[test]
-    fn the_top_library_reads_orbits_voice_first() {
-        let entries = parse_blueprint("VHDL\tgrlib\t./pkg.vhd\nVHDL\twork\t./tb.vhd\n").unwrap();
-        // orbit's env is the loudest voice: it wins even where the
-        // blueprint could answer on its own.
-        assert_eq!(top_library(Some("myproj"), &entries), "myproj");
-        assert_eq!(top_library(Some("work"), &entries), "work");
-        // An empty value counts as absent -- the `$ORBIT_TB_NAME` stance
-        // -- so the ladder falls through to the next voice.
-        assert_eq!(top_library(Some(""), &entries), "work");
-    }
-
-    #[test]
-    fn the_top_library_falls_through_the_ladder() {
-        // No env, one carried VHDL library: the top is necessarily in
-        // it -- the single-library collapse (every legacy blueprint's
-        // shape).
-        let one = parse_blueprint("VHDL\tmylib\t./a.vhd\nVHDL\tmylib\t./b.vhd\n").unwrap();
-        assert_eq!(top_library(None, &one), "mylib");
-        // No env, several libraries: vivado's default `work` -- a guess
-        // that cannot pass silently, because the wiped `xsim.dir/`
-        // cannot hold a stale unit: a wrong guess dies loudly on xelab's
-        // own design-unit refusal (`ERROR: [XSIM 43-3225] Cannot find
-        // design unit ...`, probed).
-        let many = parse_blueprint("VHDL\tgrlib\t./p.vhd\nVHDL\twork\t./tb.vhd\n").unwrap();
-        assert_eq!(top_library(None, &many), "work");
-        // An empty blueprint has no library to name: the default.
-        assert_eq!(top_library(None, &[]), "work");
-    }
-
-    #[test]
-    fn the_elaboration_argv_pins_the_top_under_its_library_prefix() {
-        // The xelab argv, pinned whole: the `-L` set, then the top under
-        // its OWN library's prefix, then `-s <top>`. The review round
-        // asked for a BARE top (`xelab -L ... <top> -s <top>`) on the
-        // theory that the qualification black-boxes the default
-        // component bindings -- REFUTED live on 2025.2.1 (2026-11-08):
-        // the default binding searches the component DECLARATION's
-        // library regardless of the top's form (a co-located
-        // component/entity pair binds under the bare and the qualified
-        // top alike; a cross-library pair black-boxes under both), and
-        // the bare top is not even a legal replacement -- it is
-        // implicitly `work.`-qualified and resolves in the work library
-        // only (`xelab -L work -L grlib tb` with everything compiled
-        // into `--work=grlib` answers `ERROR: [XSIM 43-3225] Cannot find
-        // design unit work.tb in library work`, xelab's own error naming
-        // the implicit prefix). The prefix stays: it is the only face
-        // that reaches a top in a named library -- the shape every real
-        // orbit target carries (orbit defaults a project's library to
-        // the project's NAME).
-        let entries = parse_blueprint("VHDL\twork\t./tb.vhd\nVHDL\tgrlib\t./pkg.vhd\n").unwrap();
-        assert_eq!(
-            elaborate_args(&entries, "work", "tb"),
-            vec![
-                "-L".to_string(),
-                "work".to_string(),
-                "-L".to_string(),
-                "grlib".to_string(),
-                "work.tb".to_string(),
-                "-s".to_string(),
-                "tb".to_string(),
-            ]
-        );
-        // The single-library collapse: the prefix names the carried
-        // library (`mylib.tb`), and the snapshot keeps the top's name.
-        let one = parse_blueprint("VHDL\tmylib\t./tb.vhd\n").unwrap();
-        assert_eq!(
-            elaborate_args(&one, "mylib", "tb"),
-            vec![
-                "-L".to_string(),
-                "mylib".to_string(),
-                "-L".to_string(),
-                "work".to_string(),
-                "mylib.tb".to_string(),
-                "-s".to_string(),
-                "tb".to_string(),
-            ]
-        );
-    }
-
-    #[test]
-    fn the_search_args_name_every_carried_library() {
-        // The multi-library xelab argv: one `-L` per distinct carried
-        // library, first-occurrence order, then `work` (the Verilog
-        // files' one home) and the ladder-resolved top library when the
-        // rows did not carry them.
+    fn the_map_lines_name_every_non_work_library() {
+        // The mapped-library face (the GRLIB vmap convention): one
+        // `<library>=xsim.dir/work` line per distinct blueprint library
+        // beyond `work`, first-occurrence order -- what lets a
+        // multi-library source's `library <other>;` clauses resolve
+        // under the merged compile (probed live on 2025.2.1: with the
+        // mapping the clause compiles; without it the same source dies
+        // on the dangling clause).
         let entries =
             parse_blueprint("VHDL\twork\t./tb.vhd\nVHDL\tgrlib\t./pkg.vhd\nVHDL\twork\t./d.vhd\n")
                 .unwrap();
+        assert_eq!(library_map_lines(&entries), vec!["grlib=xsim.dir/work"]);
+        // Several named libraries, first-occurrence order, deduped.
+        let many = parse_blueprint(
+            "VHDL\tgaisler\t./a.vhd\nVHDL\ttechmap\t./b.vhd\nVHDL\tgaisler\t./c.vhd\n",
+        )
+        .unwrap();
         assert_eq!(
-            library_search_args(&entries, "work"),
+            library_map_lines(&many),
+            vec!["gaisler=xsim.dir/work", "techmap=xsim.dir/work"]
+        );
+        // A single-`work` blueprint -- every legacy shape -- writes no
+        // file at all.
+        let one = parse_blueprint("VHDL\twork\t./a.vhd\nVHDL\twork\t./b.vhd\n").unwrap();
+        assert_eq!(library_map_lines(&one), Vec::<String>::new());
+        // An empty blueprint: nothing to map.
+        assert_eq!(library_map_lines(&[]), Vec::<String>::new());
+    }
+
+    #[test]
+    fn the_elaboration_argv_rides_the_bare_top_over_work() {
+        // The single-work xelab argv, pinned whole: `-L work`, the BARE
+        // top, `-s <top>`. The bare top is the ruling's face and the
+        // probed work-only resolution (a bare design unit is implicitly
+        // `work.`-qualified -- xelab's own refusal for a named-library
+        // top names the prefix) -- correct here BECAUSE everything
+        // compiles into `work` now: the qualification the pre-ruling
+        // argv carried existed to reach a named library, and there are
+        // none left on this face. `-L work` stays for the Verilog and
+        // mixed-language binding face; the snapshot keeps the top's own
+        // name, which the run argv and the crash door key on.
+        assert_eq!(
+            elaborate_args("tb"),
             vec![
                 "-L".to_string(),
                 "work".to_string(),
-                "-L".to_string(),
-                "grlib".to_string(),
+                "tb".to_string(),
+                "-s".to_string(),
+                "tb".to_string(),
             ]
-        );
-        // The single-library collapse: the carried library, then `work`
-        // (absent from the rows, tolerated by xelab, probed) -- and the
-        // top library (`mylib`, the ladder's voice 2) is already in.
-        let one = parse_blueprint("VHDL\tmylib\t./a.vhd\nVHDL\tmylib\t./b.vhd\n").unwrap();
-        assert_eq!(
-            library_search_args(&one, "mylib"),
-            vec![
-                "-L".to_string(),
-                "mylib".to_string(),
-                "-L".to_string(),
-                "work".to_string(),
-            ]
-        );
-        // An env-named library the blueprint does not carry still makes
-        // the argv: the design-unit prefix needs its library visible.
-        assert_eq!(
-            library_search_args(&entries, "foreign"),
-            vec![
-                "-L".to_string(),
-                "work".to_string(),
-                "-L".to_string(),
-                "grlib".to_string(),
-                "-L".to_string(),
-                "foreign".to_string(),
-            ]
-        );
-        // An empty blueprint: `work` and the top library, deduped.
-        assert_eq!(
-            library_search_args(&[], "work"),
-            vec!["-L".to_string(), "work".to_string()]
         );
     }
 
