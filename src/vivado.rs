@@ -53,7 +53,7 @@
 //! The build face's synth is script-generated: one `read_vhdl -library
 //! <lib>` / `read_verilog` per file (batch `read_*` takes one file per
 //! command; read order irrelevant, probed; the `-library` face is the
-//! GRLIB flow's own shape, probed in hdlm's vivado arc and driven live
+//! GRLIB flow's own shape, probed live on the GRLIB flow and driven
 //! through this crate's gated tests), per top one `synth_design -top
 //! <top> -part <part> -mode out_of_context` and the three netlist
 //! writers into `netlists/` (`write_checkpoint`/`write_verilog`/
@@ -1246,12 +1246,12 @@ ERROR: Please check the snapshot name which is created during 'xelab',the curren
             lc_all: None,
             locpath: None,
             ld_library_path: None,
-            home: Some("/home/nabil".into()),
+            home: Some("/home/tester".into()),
         };
         let vivado = Path::new("/opt/2025.2.1/Vivado/bin/vivado");
         let pairs = recipe.env_pairs(vivado);
         assert_eq!(pairs[0], ("LC_ALL".to_string(), "en_US.UTF-8".into()));
-        assert!(pairs.contains(&("LOCPATH".to_string(), "/home/nabil/.local/locale".into())));
+        assert!(pairs.contains(&("LOCPATH".to_string(), "/home/tester/.local/locale".into())));
         assert!(pairs.contains(&(
             "LD_LIBRARY_PATH".to_string(),
             "/opt/2025.2.1/Vivado/lib/lnx64.o/SuSE".into()
@@ -1262,7 +1262,7 @@ ERROR: Please check the snapshot name which is created during 'xelab',the curren
             lc_all: Some("C.UTF-8".to_string()),
             locpath: Some("/custom/locale".into()),
             ld_library_path: Some("/custom/lib".into()),
-            home: Some("/home/nabil".into()),
+            home: Some("/home/tester".into()),
         };
         let pairs = exported.env_pairs(vivado);
         assert_eq!(pairs[0], ("LC_ALL".to_string(), "C.UTF-8".into()));
