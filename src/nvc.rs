@@ -91,6 +91,55 @@ pub const LIBRARY_MARKER: &str = "_NVC_LIB";
 /// when it must name the library that holds the top: see [`top_library`].
 pub const DEFAULT_LIBRARY: &str = "work";
 
+/// The std.standard `CHARACTER` enumeration literals (VHDL LRM, stable
+/// since VHDL-87): the ASCII control positions carry their standard
+/// names (NUL..DEL), and nvc spells the 128..159 positions C128..C159.
+///
+/// A work library named identically to any of these is UNUSABLE in nvc
+/// (probed 1.23.0, 2026-11-08): nvc resolves a secondary unit's entity
+/// indication (`architecture rtl of gate`) through the qualified
+/// `<work>.<entity>` name, and the literal -- std.standard is visible
+/// in every scope -- shadows the library symbol, so the analyze dies
+/// with `** Error: name GATE not found in literal SUB` over
+/// `= Note: library SUB is hidden`, every pass of the deferral loop.
+/// Probed honestly: all 34 alphabetical names AND the whole C128..C159
+/// range fail the same way; a package-only file analyzes fine (the
+/// failure is the entity indication alone); the pre-made directory and
+/// the `_NVC_LIB` marker change nothing; uppercase and underscore
+/// spellings collide identically (nvc idents fold case and
+/// underscores); and ghdl carries the same names cleanly
+/// (`ghdl -a --work=sub` succeeds) -- the refusal is the nvc drive's
+/// alone.
+///
+/// The drive refuses these names at the blueprint face, before any
+/// analysis: burning the deferral loop on a name no retry can save
+/// would misname the DESIGN as broken when only the library NAME is
+/// unusable, and the fix lives in the manifest's `library` field.
+pub const RESERVED_LIBRARY_NAMES: &[&str] = &[
+    "NUL", "SOH", "STX", "ETX", "EOT", "ENQ", "ACK", "BEL", "BS", "HT", "LF", "VT", "FF", "CR",
+    "SO", "SI", "DLE", "DC1", "DC2", "DC3", "DC4", "NAK", "SYN", "ETB", "CAN", "EM", "SUB", "ESC",
+    "FSP", "GSP", "RSP", "USP", "DEL", "C128", "C129", "C130", "C131", "C132", "C133", "C134",
+    "C135", "C136", "C137", "C138", "C139", "C140", "C141", "C142", "C143", "C144", "C145", "C146",
+    "C147", "C148", "C149", "C150", "C151", "C152", "C153", "C154", "C155", "C156", "C157", "C158",
+    "C159",
+];
+
+/// The reserved-name check: the std.standard literal a blueprint row's
+/// library collides with, if any. The fold is nvc's own ident
+/// comparison -- case-insensitive, underscore-insensitive -- so `sub`,
+/// `SUB`, and `SU_B` all collide with the `SUB` literal.
+pub fn reserved_library_name(library: &str) -> Option<&'static str> {
+    let folded: String = library
+        .to_uppercase()
+        .chars()
+        .filter(|c| *c != '_')
+        .collect();
+    RESERVED_LIBRARY_NAMES
+        .iter()
+        .find(|name| **name == folded)
+        .copied()
+}
+
 /// The env var orbit sets on every spawned target
 /// (`ORBIT_PROJECT_LIBRARY`): the working project's HDL library name --
 /// the same name orbit's planner writes into the blueprint's library
@@ -148,6 +197,16 @@ pub enum DriveError {
     Spawn(String),
     /// The stale work libraries could not be wiped: usage-class, exit 2.
     Library(String),
+    /// A blueprint row's library name collides with a std.standard
+    /// CHARACTER literal nvc cannot carry into: usage-class, exit 2 --
+    /// the fix is the manifest's `library` field, nothing the drive
+    /// can do. See [`RESERVED_LIBRARY_NAMES`].
+    ReservedLibrary {
+        /// The colliding library name, verbatim from the blueprint.
+        library: String,
+        /// The std.standard literal that shadows it.
+        literal: &'static str,
+    },
     /// Files never analyzed after the deferral loop exhausted: findings,
     /// exit 1.
     Analyze(AnalyzeReport),
@@ -170,7 +229,8 @@ impl DriveError {
             DriveError::Blueprint(_)
             | DriveError::NotCarried(_)
             | DriveError::Spawn(_)
-            | DriveError::Library(_) => 2,
+            | DriveError::Library(_)
+            | DriveError::ReservedLibrary { .. } => 2,
             DriveError::Analyze(_) | DriveError::Elaborate { .. } | DriveError::Findings(_) => 1,
         }
     }
@@ -186,6 +246,13 @@ impl fmt::Display for DriveError {
             DriveError::NotCarried(e) => write!(f, "{e}"),
             DriveError::Spawn(message) => write!(f, "{message}"),
             DriveError::Library(message) => write!(f, "{message}"),
+            DriveError::ReservedLibrary { library, literal } => write!(
+                f,
+                "the library \"{library}\" collides with std.standard's CHARACTER literal \
+                 {literal} -- nvc's entity-indication resolution shadows the work library \
+                 with the literal (probed nvc 1.23.0), so no secondary unit can analyze \
+                 into it. Rename the project's `library` field."
+            ),
             DriveError::Analyze(report) => write!(
                 f,
                 "{} file(s) never analyzed after {} pass(es)",
@@ -257,6 +324,21 @@ pub fn drive(request: &Drive, mode: Mode) -> Result<(), DriveError> {
         eprintln!("orbit-drives: nvc: error: {e}");
         DriveError::NotCarried(e)
     })?;
+
+    // The reserved-library pre-flight: a `--work` name nvc cannot carry
+    // would burn the whole deferral loop on `not found in literal <X>`
+    // and misname the design as broken, when only the library NAME is
+    // unusable. See `RESERVED_LIBRARY_NAMES` for the probed mechanism.
+    for entry in &carried {
+        if let Some(literal) = reserved_library_name(&entry.library) {
+            let e = DriveError::ReservedLibrary {
+                library: entry.library.clone(),
+                literal,
+            };
+            eprintln!("orbit-drives: nvc: error: {e}");
+            return Err(e);
+        }
+    }
 
     println!(
         "orbit-drives: nvc: {label}: analyzing {} VHDL file(s) in blueprint order",
@@ -617,6 +699,14 @@ mod tests {
             2
         );
         assert_eq!(
+            DriveError::ReservedLibrary {
+                library: "sub".to_string(),
+                literal: "SUB",
+            }
+            .exit_code(),
+            2
+        );
+        assert_eq!(
             DriveError::Analyze(AnalyzeReport {
                 analyzed: Vec::new(),
                 residual: Vec::new(),
@@ -758,5 +848,71 @@ mod tests {
         assert_eq!(e.to_string(), "nvc -e failed for tb");
         let e = DriveError::Findings(Vec::new());
         assert_eq!(e.to_string(), "0 run(s) carried a finding");
+        let e = DriveError::ReservedLibrary {
+            library: "sub".to_string(),
+            literal: "SUB",
+        };
+        assert_eq!(
+            e.to_string(),
+            "the library \"sub\" collides with std.standard's CHARACTER literal SUB -- \
+             nvc's entity-indication resolution shadows the work library with the literal \
+             (probed nvc 1.23.0), so no secondary unit can analyze into it. Rename the \
+             project's `library` field."
+        );
+    }
+
+    #[test]
+    fn every_reserved_library_name_is_matched_through_the_ident_fold() {
+        // The reserved set is exactly the std.standard CHARACTER
+        // literals nvc shadows the work library with: every spelling
+        // nvc's ident comparison equates to one of them collides --
+        // lowercase, uppercase, and underscored alike.
+        for name in RESERVED_LIBRARY_NAMES {
+            assert_eq!(
+                reserved_library_name(name),
+                Some(*name),
+                "the canonical spelling must hit"
+            );
+            assert_eq!(
+                reserved_library_name(&name.to_lowercase()),
+                Some(*name),
+                "nvc idents fold case: {name} must hit lowercase"
+            );
+            let underscored = format!("{}_{}", name.to_lowercase(), "");
+            assert_eq!(
+                reserved_library_name(&underscored),
+                Some(*name),
+                "nvc idents fold underscores: {underscored} must hit"
+            );
+        }
+    }
+
+    #[test]
+    fn ordinary_library_names_carry_no_reservation() {
+        // The work name itself, the multi-library demo shapes, the
+        // probe benches, and near-misses that must NOT fold into a
+        // reserved name.
+        for name in ["work", "demo2", "grlib", "gaisler", "techmap", "sub2", "suba", "c160"] {
+            assert_eq!(
+                reserved_library_name(name),
+                None,
+                "{name} must be free to analyze into"
+            );
+        }
+    }
+
+    #[test]
+    fn a_reserved_library_refusal_names_the_literal_and_the_fix() {
+        // The pre-flight face, end to end: the words carry the
+        // colliding pair and the one fix that exists.
+        let e = DriveError::ReservedLibrary {
+            library: "sub".to_string(),
+            literal: reserved_library_name("sub").expect("sub is the probed case"),
+        };
+        assert_eq!(e.exit_code(), 2);
+        let words = e.to_string();
+        assert!(words.contains("\"sub\""));
+        assert!(words.contains("SUB"));
+        assert!(words.contains("Rename the project's `library` field"));
     }
 }
