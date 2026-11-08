@@ -53,6 +53,77 @@ pub const NVC_BIN: &str = "nvc";
 /// toplevel unit (`nvc --std=2008 -r top --stop-time=1ns` probed clean).
 pub const STD: &str = "--std=2008";
 
+/// The env override for that pin (`ORBIT_DRIVES_NVC_STD`): the value
+/// rides every spawn as `--std=<value>` verbatim -- nvc's own revision
+/// spellings (`1993`, `2008`, `2019`; an invalid spelling is nvc's own
+/// loud rejection at the first analyze). Unset or empty: the default
+/// pin.
+///
+/// WHY the drive carries this face: the tools' default revisions
+/// DISAGREE, and a corpus pins its own. The probed case (2026-11-08,
+/// the GRLIB leon3 zedboard workspace): the corpus is written for
+/// VHDL-93 -- its stdlib's duplicate `HRead` declarations are legal
+/// overloads under 93 and die under the homograph rule nvc enforces at
+/// its 2008-era default -- and at `--std=1993` the whole corpus (391 of
+/// 412 blueprint files, the rest the vendor-library wall) analyzes
+/// clean through the drive's own deferral loop. Riding the tool default
+/// is right only when the tool's default matches the corpus: ghdl's
+/// default IS 93 (so its pin removal was the fix there); nvc's default
+/// is 2008, so the ride keeps the wall. The real face is a per-project
+/// std selector -- none exists anywhere in the stack today (no
+/// manifest field, no target key, no command flag: upstream
+/// chaseruskin/orbit#24) -- so until one lands, the env is the drive's
+/// honest interim: the user names the corpus's revision, the drive
+/// carries it on every spawn.
+pub const STD_ENV: &str = "ORBIT_DRIVES_NVC_STD";
+
+/// The resolver behind [`std_arg`], pure so the tests can pin both
+/// arms without touching the process env.
+fn std_flag_from(value: Option<&str>) -> String {
+    match value {
+        Some(v) if !v.trim().is_empty() => format!("--std={}", v.trim()),
+        _ => STD.to_string(),
+    }
+}
+
+/// The `--std=` flag every spawn leads with: the env override when set,
+/// the pinned default otherwise.
+fn std_arg() -> String {
+    std_flag_from(std::env::var(STD_ENV).ok().as_deref())
+}
+
+/// The env override for nvc's unified heap cap (`ORBIT_DRIVES_NVC_HEAP`):
+/// the value rides every spawn's global block as the `-H <value>` pair,
+/// verbatim -- nvc's own size spellings (`2G`, `512M`; an invalid
+/// spelling is nvc's own loud rejection). Unset or empty: nothing rides
+/// (nvc's own default cap).
+///
+/// WHY the drive carries this face: nvc caps the simulation heap by
+/// default, and the cap is a DESIGN fact nothing else in the stack
+/// carries. The probed case (2026-11-08, the GRLIB leon3 zedboard
+/// systest): the design's memory models exhaust the default heap at
+/// simulation init (`** Fatal: (init): out of memory attempting to
+/// allocate 36864 byte object`). And `-H` is a GLOBAL option -- nvc
+/// rejects it after the run command (`** Fatal: unrecognised run option
+/// -H`, probed live) -- so the drive's last-step extras cannot carry it;
+/// the global block is the only placement, and the value is the user's
+/// design call.
+pub const HEAP_ENV: &str = "ORBIT_DRIVES_NVC_HEAP";
+
+/// The resolver behind the heap flag, pure so the tests can pin both
+/// arms without touching the process env. `None` when unset/blank --
+/// no heap pair rides at all.
+fn heap_args_from(value: Option<&str>) -> Vec<String> {
+    match value.map(str::trim).filter(|v| !v.is_empty()) {
+        Some(size) => vec!["-H".to_string(), size.to_string()],
+        None => Vec::new(),
+    }
+}
+
+fn heap_args() -> Vec<String> {
+    heap_args_from(std::env::var(HEAP_ENV).ok().as_deref())
+}
+
 /// The library search path every nvc spawn carries: `-L .` -- the output
 /// directory where nvc creates one directory per analyzed library. A
 /// consumer's `library <other>;` clause resolves ONLY when the other
@@ -503,9 +574,10 @@ fn analyze_once(file: &Path, library: &str) -> Result<(), String> {
 /// the elaborate and run faces it is the top's library, resolved by
 /// [`top_library`].
 fn global_args(library: &str) -> Vec<String> {
-    let mut args = vec![STD.to_string()];
+    let mut args = vec![std_arg()];
     args.extend(SEARCH_PATH_ARGS.iter().map(|arg| arg.to_string()));
     args.push(format!("--work={library}"));
+    args.extend(heap_args());
     args
 }
 
@@ -744,19 +816,43 @@ mod tests {
         // path, the work library pin -- all GLOBAL options, always
         // leading, never following a command (after it nvc answers
         // `** Fatal: unrecognised analysis option`).
-        assert_eq!(
-            global_args("grlib"),
-            vec![
-                "--std=2008".to_string(),
-                "-L".to_string(),
-                ".".to_string(),
-                "--work=grlib".to_string(),
-            ]
+        let args = global_args("grlib");
+        assert!(
+            args[0].starts_with("--std="),
+            "every argv leads with the std pin: {:?}",
+            args
         );
+        assert_eq!(&args[1..], &["-L", ".", "--work=grlib"]);
         // The library name rides verbatim -- orbit's planner owns it (the
         // §25 ruling); the drive never normalizes it to nvc's default.
         assert_eq!(global_args("work")[3], "--work=work");
         assert_eq!(global_args("MyLib")[3], "--work=MyLib");
+    }
+
+    #[test]
+    fn the_std_env_override_replaces_the_pin_and_the_default_survives() {
+        // The interim std face (see STD_ENV): a non-empty override rides
+        // verbatim; unset, empty, and blank fall back to the default
+        // pin. Pure resolver -- no process-env mutation.
+        assert_eq!(std_flag_from(Some("1993")), "--std=1993");
+        assert_eq!(std_flag_from(Some("2019")), "--std=2019");
+        assert_eq!(std_flag_from(Some("  1993  ")), "--std=1993");
+        assert_eq!(std_flag_from(None), STD);
+        assert_eq!(std_flag_from(Some("")), STD);
+        assert_eq!(std_flag_from(Some("   ")), STD);
+    }
+
+    #[test]
+    fn the_heap_env_override_rides_the_global_block_as_a_pair() {
+        // The interim heap face (see HEAP_ENV): a non-empty size rides
+        // as the two-token `-H <size>` pair (nvc's getopt shape -- one
+        // merged token is rejected); unset, empty, and blank ride
+        // nothing at all. Pure resolver -- no process-env mutation.
+        assert_eq!(heap_args_from(Some("2G")), vec!["-H", "2G"]);
+        assert_eq!(heap_args_from(Some(" 512M ")), vec!["-H", "512M"]);
+        assert_eq!(heap_args_from(None), Vec::<String>::new());
+        assert_eq!(heap_args_from(Some("")), Vec::<String>::new());
+        assert_eq!(heap_args_from(Some("   ")), Vec::<String>::new());
     }
 
     #[test]
