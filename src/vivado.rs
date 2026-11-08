@@ -487,7 +487,7 @@ impl fmt::Display for NotCarried {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
         write!(
             f,
-            "the vivado drives carry the VHDL, VLOG, and SYSV filesets only; not yet carried:"
+            "the vivado drives carry the VHDL, VLOG, and SYSV filesets (ALLHDL rows by their extension) only; not yet carried:"
         )?;
         for entry in &self.entries {
             write!(

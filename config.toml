@@ -1,6 +1,25 @@
 # The orbit-drives target fragment. Include it into an orbit project
 # configuration to add the shipped target entries -- 14 targets across
-# the 8 carried tools:
+# the 8 carried tools.
+#
+# Every target carries the custom recursive ALLHDL fileset
+# (`fileset.ALLHDL`, the owner's 2026-11-08 ruling): the FULL HDL file
+# set of every project in the dependency graph rides the blueprint
+# regardless of orbit's reference closure. WHY: orbit's blueprint is the
+# top's static reference closure, and a DEFAULT component binding (a
+# component declaration with no static entity reference -- the GRLIB
+# style) is invisible to that walk: the zedboard demo's multiplier entity
+# (techmap/rtl/inferred/mul_inferred.vhd, bound only through mul32's
+# component) dropped from the blueprint and xsim black-boxed it (the
+# `10-4940` face, error(2); probed at the directory level 2026-11-08).
+# The custom fileset face bypasses the closure (probed: a dependency
+# project's unreferenced source rides the blueprint under ALLHDL where
+# the bare planning drops it). PROBED SEMANTICS: a custom fileset
+# REPLACES the built-in VHDL/VLOG/SYSV collection in the blueprint --
+# every row rides as ALLHDL -- so the drives route ALLHDL rows by their
+# file extension (.vhd/.vhdl to the VHDL faces, .v/.sv to the Verilog
+# faces); a face outside its extension is the loud exit-2, never a
+# silent skip.
 #
 #   orbit config --push include=/path/to/orbit-drives/config.toml
 #
@@ -48,56 +67,67 @@
 name = "ghdl"
 description = "VHDL testbenches through ghdl: blueprint-order analysis with the deferral loop, each run gated on ghdl's probed failure vocabulary and the honest exit"
 command = ["orbit-drives", "ghdl"]
+fileset.ALLHDL = { patterns = ["**/*.vhd", "**/*.vhdl", "**/*.v", "**/*.sv"], recursive = true }
 
 [[target]]
 name = "ghdl-build"
 description = "VHDL builds through ghdl: blueprint-order analysis with the deferral loop, then elaboration per top -- exit honest, no simulation, nothing judged"
 command = ["orbit-drives", "ghdl-build"]
+fileset.ALLHDL = { patterns = ["**/*.vhd", "**/*.vhdl", "**/*.v", "**/*.sv"], recursive = true }
 
 [[target]]
 name = "nvc"
 description = "VHDL testbenches through nvc: blueprint-order analysis with the deferral loop, each run gated on nvc's probed failure vocabulary and the honest exit"
 command = ["orbit-drives", "nvc"]
+fileset.ALLHDL = { patterns = ["**/*.vhd", "**/*.vhdl", "**/*.v", "**/*.sv"], recursive = true }
 
 [[target]]
 name = "nvc-build"
 description = "VHDL builds through nvc: blueprint-order analysis with the deferral loop, then elaboration per top -- exit honest, no simulation, nothing judged"
 command = ["orbit-drives", "nvc-build"]
+fileset.ALLHDL = { patterns = ["**/*.vhd", "**/*.vhdl", "**/*.v", "**/*.sv"], recursive = true }
 
 [[target]]
 name = "iverilog"
 description = "Verilog/SV testbenches through Icarus Verilog: one order-free compile into a snapshot (-g2012, every --top a -s root), then one judged vvp run -- vvp exits 0 on a $error call, so the probed vocabulary is the load-bearing gate"
 command = ["orbit-drives", "iverilog"]
+fileset.ALLHDL = { patterns = ["**/*.vhd", "**/*.vhdl", "**/*.v", "**/*.sv"], recursive = true }
 
 [[target]]
 name = "iverilog-build"
 description = "Verilog/SV builds through Icarus Verilog: the one order-free compile into a snapshot, exit honest -- no simulation, nothing judged; every --top a -s root, validated by iverilog at compile time"
 command = ["orbit-drives", "iverilog-build"]
+fileset.ALLHDL = { patterns = ["**/*.vhd", "**/*.vhdl", "**/*.v", "**/*.sv"], recursive = true }
 
 [[target]]
 name = "verilator"
 description = "Verilog/SV testbenches through verilator: one lint (--timing; every --top a --top-module, of which verilator honors only the last), one model build per top (--binary --build into obj_dir; each build validates its top), each model run gated on verilator's probed failure vocabulary and the model's exit -- every probed model failure dies by SIGABRT"
 command = ["orbit-drives", "verilator"]
+fileset.ALLHDL = { patterns = ["**/*.vhd", "**/*.vhdl", "**/*.v", "**/*.sv"], recursive = true }
 
 [[target]]
 name = "verilator-build"
 description = "Verilog/SV builds through verilator: the lint and the per-top model builds only, exit honest -- no simulation, nothing judged; the lint honors only the last --top-module (an unknown non-last top lints clean), and the lint and build exits are honest (exit 1 on a lint error, an unknown top's own build, or an enabled warning)"
 command = ["orbit-drives", "verilator-build"]
+fileset.ALLHDL = { patterns = ["**/*.vhd", "**/*.vhdl", "**/*.v", "**/*.sv"], recursive = true }
 
 [[target]]
 name = "yosys"
 description = "Verilog/SV synthesis through yosys: one script-driven `yosys -p` per top (read every blueprint Verilog file, synth -top, write netlists/<top>.v), the log judged on yosys's probed ERROR: vocabulary AND yosys's exit -- every probed failure exits 1, so the exit convicts and the judge is the second witness. Build only: yosys has no runtime, there is no sim face"
 command = ["orbit-drives", "yosys"]
+fileset.ALLHDL = { patterns = ["**/*.vhd", "**/*.vhdl", "**/*.v", "**/*.sv"], recursive = true }
 
 [[target]]
 name = "vivado-build"
 description = "VHDL and Verilog/SV synthesis through Vivado: xvhdl compiles the VHDL in blueprint order through the deferral loop (order-sensitive within work, probed), one order-free xvlog compiles the Verilog, then per top the GENERATED synthesis script rides `vivado -mode batch -nojournal -nolog` -- one read per file, synth_design -top -part -mode out_of_context, three netlist writers into netlists/, the whole body inside one return-code catch-guard (Tcl's catch returns the writers' filename results, so an emptiness guard would false-fail a clean synth -- probed). Requires --part BEFORE any drive (exit 2 at the CLI); needs the launch recipe env, which the drive sets on every spawn (see the README)"
 command = ["orbit-drives", "vivado-build"]
+fileset.ALLHDL = { patterns = ["**/*.vhd", "**/*.vhdl", "**/*.v", "**/*.sv"], recursive = true }
 
 [[target]]
 name = "vivado"
 description = "VHDL and Verilog/SV testbenches through Vivado xsim: the same both-language compile, then xelab per top (-L work work.<top> -s <top>) and one xsim -R per snapshot, every run log gated on vivado's probed LINE-START failure vocabulary (Failure:/Error:/Fatal: at line start; case drift and mid-line markers never judge) -- xsim exits 0 on BOTH probed runtime failures (a severity failure AND a severity error), so the judge is the load-bearing gate; the sim face consumes no --part"
 command = ["orbit-drives", "vivado"]
+fileset.ALLHDL = { patterns = ["**/*.vhd", "**/*.vhdl", "**/*.v", "**/*.sv"], recursive = true }
 
 # The quartus targets are DOCUMENTED-ONLY: quartus is not installed on
 # the probing box, every CLI face below is the documented hypothesis
@@ -110,11 +140,13 @@ command = ["orbit-drives", "vivado"]
 name = "quartus-build"
 description = "VHDL and Verilog/SV synthesis through Quartus (DOCUMENTED-ONLY, UNPROBED): per top a GENERATED .qsf (DEVICE from --part, TOP_LEVEL_ENTITY, one VHDL_FILE / VERILOG_FILE line per blueprint file) and one batch `quartus_map --read_settings_files=off --write_settings_files=off <top> -c <top>`, exit honest -- the exit honesty is the documented hypothesis. Requires --part BEFORE any drive (exit 2 at the CLI)"
 command = ["orbit-drives", "quartus-build"]
+fileset.ALLHDL = { patterns = ["**/*.vhd", "**/*.vhdl", "**/*.v", "**/*.sv"], recursive = true }
 
 [[target]]
 name = "quartus"
 description = "VHDL testbenches through Quartus's bundled Questa (DOCUMENTED-ONLY, UNPROBED): vlib work, vmap work work, vcom -2008 -work work per VHDL file through the deferral loop, then per top `vsim -c -do \"run -all; quit\" -L work work.<top>`, every run log gated on the hypothesized ModelSim-family LINE-START vocabulary (Fatal:/Error:/Failure:, UNPROBED) AND the exit (vsim honest, UNPROBED) -- neither witness is trusted alone. Carries the VHDL fileset only (the documented recipe is vcom's); the sim face consumes no --part"
 command = ["orbit-drives", "quartus"]
+fileset.ALLHDL = { patterns = ["**/*.vhd", "**/*.vhdl", "**/*.v", "**/*.sv"], recursive = true }
 
 # The cocotb target is LIVE: probed on cocotb 2.1.0 + ghdl 6.0.0. Needs
 # cocotb (>= 2.0, the cocotb_tools runner package) and ghdl on PATH. The
@@ -127,3 +159,4 @@ command = ["orbit-drives", "quartus"]
 name = "cocotb"
 description = "VHDL testbenches through cocotb's own runner (LIVE, probed on cocotb 2.1.0): the generated runner script per top drives cocotb_tools.runner over ghdl (the runner IS the compile: ghdl -i / -m / -r), reads results.xml, and exits honest -- the load-bearing exit, probed: the runner exits 0 on a failed test (the finding lands only in results.xml). Every run log gated on cocotb's probed failure vocabulary (the space-padded ` FAIL ` row column, the missing-results face) AND the script's exit. Carries the VHDL fileset only (the ghdl backend compiles VHDL only, probed); requires --test-module <path.py>"
 command = ["orbit-drives", "cocotb"]
+fileset.ALLHDL = { patterns = ["**/*.vhd", "**/*.vhdl", "**/*.v", "**/*.sv"], recursive = true }

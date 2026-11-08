@@ -200,12 +200,12 @@ impl fmt::Display for NotCarried {
         match self.face {
             "build face" => write!(
                 f,
-                "the quartus build face carries the VHDL, VLOG, and SYSV filesets only; \
-                 not yet carried:"
+                "the quartus build face carries the VHDL, VLOG, and SYSV filesets (ALLHDL \
+                 rows by their extension) only; not yet carried:"
             )?,
             _ => write!(
                 f,
-                "the quartus sim face carries the VHDL fileset only; not yet carried:"
+                "the quartus sim face carries the VHDL fileset (ALLHDL rows by their .vhd/.vhdl extension) only; not yet carried:"
             )?,
         }
         for entry in &self.entries {
@@ -849,14 +849,14 @@ sim done
         };
         assert!(build
             .to_string()
-            .starts_with("the quartus build face carries the VHDL, VLOG, and SYSV filesets only"));
+            .starts_with("the quartus build face carries the VHDL, VLOG, and SYSV filesets"));
         let sim = NotCarried {
             face: "sim face",
             entries: Vec::new(),
         };
         assert!(sim
             .to_string()
-            .starts_with("the quartus sim face carries the VHDL fileset only"));
+            .starts_with("the quartus sim face carries the VHDL fileset"));
     }
 
     #[test]

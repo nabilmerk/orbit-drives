@@ -251,7 +251,7 @@ fn the_real_quartus_sim_face_rejects_the_verilog_fileset_loudly() {
     );
     let stderr = String::from_utf8_lossy(&sim.stderr);
     assert!(
-        stderr.contains("the quartus sim face carries the VHDL fileset only"),
+        stderr.contains("the quartus sim face carries the VHDL fileset"),
         "the not-carried face should name the sim face's fileset:\n{stderr}"
     );
     fs::remove_dir_all(&out).ok();

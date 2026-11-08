@@ -133,8 +133,9 @@ impl fmt::Display for NotCarried {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
         write!(
             f,
-            "the cocotb drive carries the VHDL fileset only (the ghdl backend compiles \
-             VHDL only, probed); not yet carried:"
+            "the cocotb drive carries the VHDL fileset (ALLHDL rows by their \
+             .vhd/.vhdl extension) only (the ghdl backend compiles VHDL only, probed); \
+             not yet carried:"
         )?;
         for entry in &self.entries {
             write!(
@@ -766,7 +767,7 @@ ERROR: Simulation terminated abnormally. Results file /tmp/x/sim_build/results.x
         });
         assert!(e
             .to_string()
-            .starts_with("the cocotb drive carries the VHDL fileset only"));
+            .starts_with("the cocotb drive carries the VHDL fileset"));
     }
 
     #[test]

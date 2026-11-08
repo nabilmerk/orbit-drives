@@ -61,6 +61,7 @@ pub mod vivado;
 pub mod yosys;
 
 pub use blueprint::{
-    parse_blueprint, quartus_files, verilog_only, vhdl_entries, vhdl_only, vivado_files,
-    BlueprintError, Drive, Entry, MalformedLine, Mode, NotCarried,
+    is_verilog_row, is_vhdl_row, parse_blueprint, quartus_files, verilog_only, vhdl_entries,
+    vhdl_only, vivado_files, BlueprintError, Drive, Entry, MalformedLine, Mode, NotCarried,
+    ALL_HDL_FILESET,
 };

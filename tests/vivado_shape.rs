@@ -509,9 +509,25 @@ fn the_real_vivado_drive_consumes_two_libraries_end_to_end() {
     // waits one more round on the not-yet-compiled gate (the tb row
     // comes first); pass 3 retires tb.
     write_multilib(&out);
+    // The unreferenced fourth file rides the blueprint under the custom
+    // ALLHDL fileset -- the shipped config.toml's face (the reference
+    // closure drops an unreferenced source; the fileset face carries
+    // it), and the drive routes the row by its extension like any
+    // other.
+    write(
+        &out.join("orphan.vhd"),
+        "\
+entity orphan is
+end entity;
+architecture rtl of orphan is
+begin
+end architecture;
+",
+    );
     write(
         &out.join("blueprint.tsv"),
-        "VHDL\twork\t./tb.vhd\nVHDL\twork\t./gate.vhd\nVHDL\tgrlib\t./pkg.vhd\n",
+        "VHDL\twork\t./tb.vhd\nVHDL\twork\t./gate.vhd\nVHDL\tgrlib\t./pkg.vhd\n\
+         ALLHDL\twork\t./orphan.vhd\n",
     );
 
     // The single-work face: every file compiles into `work`, and the
@@ -534,9 +550,10 @@ fn the_real_vivado_drive_consumes_two_libraries_end_to_end() {
     );
     let stdout = String::from_utf8_lossy(&orbit_shape.stdout);
     assert!(
-        stdout.contains("3 VHDL file(s) compiled in 3 pass(es)"),
-        "the deferral loop should defer: tb waits on its providers across two \
-         passes:\n{stdout}"
+        stdout.contains("4 VHDL file(s) compiled in 3 pass(es)"),
+        "the ALLHDL row should ride the compile beside the built-in rows (4 files, the \
+         orphan among them), and the deferral loop should defer: tb waits on its \
+         providers across two passes:\n{stdout}"
     );
     assert!(
         stdout.contains("tb: pass"),

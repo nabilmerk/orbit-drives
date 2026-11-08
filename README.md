@@ -33,6 +33,13 @@ Include the shipped target fragment into an orbit project configuration:
 orbit config --push include=/path/to/orbit-drives/config.toml
 ```
 
+Every shipped target entry carries the custom recursive `ALLHDL`
+fileset: the FULL HDL file set of every project in the dependency graph
+rides the blueprint regardless of orbit's reference closure -- the
+default-bound entities a reference walk cannot see ride like any other
+file (the why and the probed semantics live in the honest limits'
+fileset bullet). The drives route ALLHDL rows by their file extension.
+
 Then run the target:
 
 ```sh
@@ -922,16 +929,35 @@ vocabulary, never this one.
 
 ## Honest limits
 
-- **The filesets are per tool.** The VHDL drives (`ghdl`, `nvc`,
-  `cocotb`) carry the `VHDL` fileset only; the Verilog drives
-  (`iverilog`, `verilator`, `yosys`) carry `VLOG` and `SYSV` (their
-  native filesets) and reject `VHDL` and custom filesets with a loud
-  exit-2 ("not yet carried"), never a silent skip. The vivado drives
-  and the quartus-build face carry all three (`VHDL` + `VLOG` + `SYSV`)
-  and reject only custom filesets -- vivado is the one PROBED tool that
-  speaks both languages, quartus-build the documented-only second; the
-  quartus sim face carries the `VHDL` fileset only (the documented
-  recipe is vcom's alone).
+- **The filesets are per tool -- and the shipped targets ride ALLHDL.**
+  The VHDL drives (`ghdl`, `nvc`, `cocotb`) carry the `VHDL` fileset
+  only; the Verilog drives (`iverilog`, `verilator`, `yosys`) carry
+  `VLOG` and `SYSV` (their native filesets); the vivado drives and the
+  quartus-build face carry all three -- vivado is the one PROBED tool
+  that speaks both languages, quartus-build the documented-only second;
+  the quartus sim face carries the `VHDL` fileset only (the documented
+  recipe is vcom's alone). Every face additionally routes the custom
+  `ALLHDL` fileset BY EXTENSION (`.vhd`/`.vhdl` to the VHDL faces,
+  `.v`/`.sv` to the Verilog faces): the shipped `config.toml` target
+  entries all carry `fileset.ALLHDL = { patterns = ["**/*.vhd",
+  "**/*.vhdl", "**/*.v", "**/*.sv"], recursive = true }` -- the FULL HDL
+  file set of every project in the dependency graph riding every
+  blueprint REGARDLESS of orbit's reference closure (the owner's
+  2026-11-08 ruling). WHY: orbit's blueprint is the top's static
+  reference closure, and a DEFAULT component binding (a component
+  declaration with no static entity reference -- the GRLIB style) is
+  invisible to that walk -- the zedboard demo's multiplier entity
+  (techmap/rtl/inferred/mul_inferred.vhd, bound only through mul32's
+  component) dropped from the blueprint and xsim black-boxed it (the
+  `10-4940` face, the systest's error(2); root-caused at the directory
+  level 2026-11-08). The custom-fileset face bypasses the closure
+  (probed live on orbit: a dependency project's unreferenced source
+  rides the blueprint under ALLHDL where the bare planning drops it),
+  and its probed semantics are why the drives route it: a custom
+  fileset REPLACES the built-in VHDL/VLOG/SYSV collection in the
+  blueprint -- every row rides as ALLHDL -- so a face outside its
+  extension is the loud exit-2, never a silent skip, and everything
+  else compiles exactly as before.
 - **Eight tool names, eight vocabularies: ghdl, nvc, iverilog,
   verilator, yosys, vivado, quartus, cocotb.** Any other tool name is a
   loud error at the CLI, never a guess. Seven vocabularies are probed;

@@ -261,7 +261,7 @@ fn the_real_yosys_drive_rejects_the_vhdl_fileset_loudly() {
     );
     let stderr = String::from_utf8_lossy(&drive.stderr);
     assert!(
-        stderr.contains("the Verilog drives carry the VLOG and SYSV filesets only"),
+        stderr.contains("the Verilog drives carry the VLOG and SYSV filesets"),
         "the not-carried face must name the filesets:\n{stderr}"
     );
     assert!(

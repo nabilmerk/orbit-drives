@@ -11,7 +11,23 @@
 //! machinery, still housed with the drive that first carried it.
 
 use std::fmt;
-use std::path::PathBuf;
+use std::path::{Path, PathBuf};
+
+/// The custom recursive fileset the shipped target entries carry
+/// (`config.toml`: `fileset.ALLHDL = { patterns = ["**/*.vhd",
+/// "**/*.vhdl", "**/*.v", "**/*.sv"], recursive = true }`) -- the FULL
+/// HDL file set of every project in the dependency graph, riding every
+/// blueprint regardless of orbit's reference closure (probed live on
+/// orbit 2026-11-08: a dependency project's unreferenced source rides
+/// the blueprint under ALLHDL where the bare planning drops it -- the
+/// default-bound entities, whose only link is a component declaration
+/// no reference walk can see). The blueprint through a shipped target
+/// carries ALLHDL rows INSTEAD of the built-in VHDL/VLOG/SYSV rows (the
+/// custom fileset replaces the built-ins in the plan), so every drive
+/// routes an ALLHDL row by its file EXTENSION (`.vhd`/`.vhdl` to the
+/// VHDL faces, `.v`/`.sv` to the Verilog faces) -- see
+/// [`is_vhdl_row`] / [`is_verilog_row`].
+pub const ALL_HDL_FILESET: &str = "ALLHDL";
 
 /// One entry of the blueprint: a fileset, a library, and the file's path.
 #[derive(Clone, Debug, PartialEq, Eq)]
@@ -210,7 +226,7 @@ impl fmt::Display for NotCarried {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
         write!(
             f,
-            "the VHDL drives carry the VHDL fileset only; not yet carried:"
+            "the VHDL drives carry the VHDL fileset (ALLHDL rows by their .vhd/.vhdl extension) only; not yet carried:"
         )?;
         for entry in &self.entries {
             write!(
@@ -232,8 +248,47 @@ impl std::error::Error for NotCarried {}
 /// each file analyzed into the library its own row declares (`--work=
 /// <entry.library>`), so the deferral loop stays per-file and cross-library
 /// references defer across libraries exactly as they do within one.
+/// [`ALL_HDL_FILESET`] rows ride by their extension (see
+/// [`is_vhdl_row`]).
 ///
-/// Every non-VHDL entry -- `VLOG`, `SYSV`, a custom fileset -- is rejected
+/// Whether one blueprint row is a VHDL row for the drives' routing: the
+/// built-in `VHDL` fileset, or an [`ALL_HDL_FILESET`] row whose file
+/// carries a `.vhd`/`.vhdl` extension (the shipped targets ride ALLHDL
+/// rows instead of the built-ins, and the extension is the only
+/// language signal a merged fileset row carries).
+pub fn is_vhdl_row(entry: &Entry) -> bool {
+    entry.fileset == "VHDL" || (entry.fileset == ALL_HDL_FILESET && vhdl_extension(&entry.path))
+}
+
+/// Whether one blueprint row is a Verilog/SV row for the drives'
+/// routing: the built-in `VLOG`/`SYSV` filesets, or an
+/// [`ALL_HDL_FILESET`] row whose file carries a `.v`/`.sv` extension.
+pub fn is_verilog_row(entry: &Entry) -> bool {
+    entry.fileset == "VLOG"
+        || entry.fileset == "SYSV"
+        || (entry.fileset == ALL_HDL_FILESET && verilog_extension(&entry.path))
+}
+
+/// Whether `path` carries a VHDL extension (`.vhd`/`.vhdl`, lowercase --
+/// orbit's fileset globs are case-sensitive too).
+fn vhdl_extension(path: &Path) -> bool {
+    matches!(
+        path.extension().and_then(|ext| ext.to_str()),
+        Some("vhd") | Some("vhdl")
+    )
+}
+
+/// Whether `path` carries a Verilog/SV extension (`.v`/`.sv`,
+/// lowercase).
+fn verilog_extension(path: &Path) -> bool {
+    matches!(
+        path.extension().and_then(|ext| ext.to_str()),
+        Some("v") | Some("sv")
+    )
+}
+
+/// Every non-VHDL entry -- `VLOG`, `SYSV`, an ALLHDL row with a Verilog
+/// extension, a custom fileset -- is rejected
 /// loudly, through the same shared [`NotCarried`] refusal as
 /// [`vhdl_only`]: mixed-language designs stay outside the VHDL drives'
 /// contract, and a silent skip would leave files the user believes were
@@ -241,7 +296,7 @@ impl std::error::Error for NotCarried {}
 pub fn vhdl_entries(entries: &[Entry]) -> Result<Vec<Entry>, NotCarried> {
     let foreign: Vec<Entry> = entries
         .iter()
-        .filter(|entry| entry.fileset != "VHDL")
+        .filter(|entry| !is_vhdl_row(entry))
         .cloned()
         .collect();
     if foreign.is_empty() {
@@ -274,7 +329,7 @@ pub fn vhdl_only(entries: &[Entry]) -> Result<Vec<PathBuf>, NotCarried> {
 pub fn verilog_only(entries: &[Entry]) -> Result<Vec<PathBuf>, crate::iverilog::NotCarried> {
     let foreign: Vec<Entry> = entries
         .iter()
-        .filter(|entry| entry.fileset != "VLOG" && entry.fileset != "SYSV")
+        .filter(|entry| !is_verilog_row(entry))
         .cloned()
         .collect();
     if foreign.is_empty() {
@@ -308,16 +363,14 @@ pub fn vivado_files(
 ) -> Result<(Vec<Entry>, Vec<PathBuf>), crate::vivado::NotCarried> {
     let foreign: Vec<Entry> = entries
         .iter()
-        .filter(|entry| {
-            entry.fileset != "VHDL" && entry.fileset != "VLOG" && entry.fileset != "SYSV"
-        })
+        .filter(|entry| !is_vhdl_row(entry) && !is_verilog_row(entry))
         .cloned()
         .collect();
     if foreign.is_empty() {
         let mut vhdl = Vec::new();
         let mut verilog = Vec::new();
         for entry in entries {
-            if entry.fileset == "VHDL" {
+            if is_vhdl_row(entry) {
                 vhdl.push(entry.clone());
             } else {
                 verilog.push(entry.path.clone());
@@ -345,16 +398,14 @@ pub fn quartus_files(
 ) -> Result<(Vec<PathBuf>, Vec<PathBuf>), crate::quartus::NotCarried> {
     let foreign: Vec<Entry> = entries
         .iter()
-        .filter(|entry| {
-            entry.fileset != "VHDL" && entry.fileset != "VLOG" && entry.fileset != "SYSV"
-        })
+        .filter(|entry| !is_vhdl_row(entry) && !is_verilog_row(entry))
         .cloned()
         .collect();
     if foreign.is_empty() {
         let mut vhdl = Vec::new();
         let mut verilog = Vec::new();
         for entry in entries {
-            if entry.fileset == "VHDL" {
+            if is_vhdl_row(entry) {
                 vhdl.push(entry.path.clone());
             } else {
                 verilog.push(entry.path.clone());
@@ -422,6 +473,63 @@ mod tests {
     }
 
     #[test]
+    fn the_allhdl_rows_ride_by_their_extension() {
+        // The shipped targets' custom recursive fileset (config.toml's
+        // `fileset.ALLHDL`, the owner's 2026-11-08 ruling): the blueprint
+        // through such a target carries ALLHDL rows INSTEAD of the
+        // built-ins (probed live on orbit -- the custom fileset replaces
+        // the built-in collection in the plan), so every drive routes a
+        // row by its file EXTENSION: .vhd/.vhdl to the VHDL faces, .v/.sv
+        // to the Verilog faces -- and the library column rides the row
+        // unchanged.
+        let vhdl_rows =
+            parse_blueprint("ALLHDL\tgrlib\t./pkg.vhd\nALLHDL\twork\t./tb.vhd\n").unwrap();
+        let verilog_rows =
+            parse_blueprint("ALLHDL\twork\t./top.v\nALLHDL\twork\t./tb.sv\n").unwrap();
+        // The VHDL faces carry the ALLHDL .vhd/.vhdl rows (libraries
+        // attached); the Verilog faces carry the ALLHDL .v/.sv rows.
+        let carried = vhdl_entries(&vhdl_rows).unwrap();
+        assert_eq!(carried.len(), 2);
+        assert_eq!(carried[0].path, PathBuf::from("./pkg.vhd"));
+        assert_eq!(carried[0].library, "grlib");
+        assert_eq!(carried[1].path, PathBuf::from("./tb.vhd"));
+        assert_eq!(
+            verilog_only(&verilog_rows).unwrap(),
+            vec![PathBuf::from("./top.v"), PathBuf::from("./tb.sv")]
+        );
+        // A MIXED ALLHDL blueprint is still a loud rejection on the
+        // single-language faces (the per-face carry rules are unchanged:
+        // the Verilog rows are foreign to the VHDL drives and vice
+        // versa) -- only the both-language faces split it.
+        let mixed = parse_blueprint("ALLHDL\tgrlib\t./pkg.vhd\nALLHDL\twork\t./top.v\n").unwrap();
+        assert_eq!(vhdl_entries(&mixed).unwrap_err().entries.len(), 1);
+        assert_eq!(verilog_only(&mixed).unwrap_err().entries.len(), 1);
+        // The both-language faces split the merged fileset by extension.
+        let both = parse_blueprint(
+            "ALLHDL\tgrlib\t./pkg.vhd\nALLHDL\twork\t./tb.vhd\nALLHDL\twork\t./top.v\n\
+             ALLHDL\twork\t./tb.sv\n",
+        )
+        .unwrap();
+        let (vhdl, verilog) = vivado_files(&both).unwrap();
+        assert_eq!(vhdl.len(), 2);
+        assert_eq!(vhdl[0].library, "grlib");
+        assert_eq!(
+            verilog,
+            vec![PathBuf::from("./top.v"), PathBuf::from("./tb.sv")]
+        );
+        // The built-in filesets ride exactly as before beside the
+        // ALLHDL routing.
+        assert!(is_vhdl_row(&both[0]));
+        assert!(is_verilog_row(&both[2]));
+        assert!(!is_vhdl_row(&both[2]));
+        // An ALLHDL row with neither family's extension is a loud
+        // not-carried face, never a silent skip.
+        let weird = parse_blueprint("ALLHDL\twork\t./x.txt\n").unwrap();
+        assert!(vhdl_entries(&weird).is_err());
+        assert!(verilog_only(&weird).is_err());
+    }
+
+    #[test]
     fn the_entry_filter_hands_the_drive_both_paths_and_libraries() {
         // The VHDL drives' multi-library face: the carried entries carry
         // their blueprint library beside their path, in blueprint order.
@@ -449,7 +557,7 @@ mod tests {
         let err = vhdl_only(&parse_blueprint("VLOG\twork\t./b.v\n").unwrap()).unwrap_err();
         let message = err.to_string();
         assert!(
-            message.starts_with("the VHDL drives carry the VHDL fileset only"),
+            message.starts_with("the VHDL drives carry the VHDL fileset"),
             "the refusal should name the drive family: {message}"
         );
         assert!(

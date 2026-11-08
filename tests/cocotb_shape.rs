@@ -365,7 +365,7 @@ fn the_real_cocotb_drive_rejects_the_verilog_fileset_loudly() {
     );
     assert!(
         String::from_utf8_lossy(&not_carried.stderr)
-            .contains("the cocotb drive carries the VHDL fileset only"),
+            .contains("the cocotb drive carries the VHDL fileset"),
         "the not-carried face should name the drive's fileset:\n{}",
         String::from_utf8_lossy(&not_carried.stderr)
     );

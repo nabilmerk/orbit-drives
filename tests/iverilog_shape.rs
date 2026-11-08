@@ -357,7 +357,7 @@ endmodule
     );
     let stderr = String::from_utf8_lossy(&run.stderr);
     assert!(
-        stderr.contains("the Verilog drives carry the VLOG and SYSV filesets only"),
+        stderr.contains("the Verilog drives carry the VLOG and SYSV filesets"),
         "the fileset door should name what IS carried:\n{stderr}"
     );
     fs::remove_dir_all(&foreign).ok();
