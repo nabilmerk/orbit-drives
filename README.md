@@ -184,10 +184,12 @@ same face the nvc drive carries, on ghdl's own resolution:
 
 1. Read the blueprint; every non-VHDL entry (`VLOG`, `SYSV`, a custom
    fileset) is a loud exit-2, never a silent skip.
-2. Wipe the stale library state (every `<library>-obj08.cf` in the output
-   directory): ghdl's library file is its clock -- one file per analyzed
-   library now, named after the standard (`-obj08`) and LOWERCASED by
-   ghdl (`--work=MyLib` writes `mylib-obj08.cf`, probed). A second run in
+2. Wipe the stale library state (every `<library>-obj<STD>.cf` in the
+   output directory -- the whole FAMILY, every std tag): ghdl's library
+   file is its clock -- one file per analyzed library, tagged with the
+   standard it was analyzed under (`-obj93` under the tool default the
+   drive rides, `-obj08` under a pinned 08) and LOWERCASED by ghdl
+   (`--work=MyLib` writes `mylib-obj93.cf`, probed). A second run in
    orbit's persistent output directory would otherwise obsolete its own
    design out from under `ghdl -e`; and a library a previous blueprint
    analyzed but this one no longer names must die too, or a
@@ -197,19 +199,20 @@ same face the nvc drive carries, on ghdl's own resolution:
    starts from empty libraries.
 3. Analyze the VHDL files in blueprint order with the **deferral loop**,
    each file into the library its own blueprint row declares
-   (`ghdl -a --std=08 --work=<entry.library> <file>`): ghdl is
+   (`ghdl -a --work=<entry.library> <file>` -- NO std flag: the drive
+   rides ghdl's own default, see the argv bullet below): ghdl is
    order-sensitive, so a failing analyze defers its file to a retry after
    the others; a pass that makes no progress stops the loop with every
    residual stderr surfaced verbatim. Cross-library references defer
    across libraries exactly as they defer within one: pass 1's
    `cannot find resource library "<other>"` face is the absent
-   `<other>-obj08.cf` file, and the retry resolves once the provider's
+   `<other>-obj93.cf` file, and the retry resolves once the provider's
    row has written it.
-4. Elaborate each top (`ghdl -e --std=08 --work=<the top's library> <top>
+4. Elaborate each top (`ghdl -e --work=<the top's library> <top>
    <extras>` on the build face; the extras ride the elab argv there
    because there is no run to carry them). A nonzero elaboration is a
    finding, exit 1.
-5. (`ghdl` only) Run each top (`ghdl -r --std=08 --work=<the top's
+5. (`ghdl` only) Run each top (`ghdl -r --work=<the top's
    library> <top> --assert-level=error <extra args>`; the assert level is
    a simulation option, legal only after the toplevel unit) and capture
    the log.
@@ -220,9 +223,9 @@ The multi-library facts the probes wrote down:
 
 - **No search-path flag exists or is needed.** ghdl resolves a
   consumer's `library <other>;` clause against the sibling
-  `<other>-obj08.cf` file in the SAME working directory, automatically --
-  `ghdl -a --std=08 --work=work gate.vhd` analyzing clean against
-  `grlib-obj08.cf` with no `-P`/`-L` anywhere (probed; move the sibling
+  `<other>-obj93.cf` file in the SAME working directory, automatically --
+  `ghdl -a --work=work gate.vhd` analyzing clean against
+  `grlib-obj93.cf` with no `-P`/`-L` anywhere (probed; move the sibling
   into a subdirectory and the resolution dies: ghdl's library search is
   the cwd alone). Orbit already spawns the drive with the output
   directory as the cwd, where every row's file lands.
@@ -244,15 +247,20 @@ The multi-library facts the probes wrote down:
   the residual stderr relays the faces verbatim, exit 1 -- never a silent
   blackbox degradation. Every library the blueprint carries is analyzed,
   so this face cannot fire for one.
-- **The argv shape changed with the multi-library face** (2026-11-07):
-  every project's analyze/elab/run now carries `--work=<library>` -- a
-  depless single-library project's analyze went from
-  `ghdl -a --std=08 f.vhd` to `ghdl -a --std=08 --work=work f.vhd`, its
-  elaboration from `ghdl -e --std=08 top` to
-  `ghdl -e --std=08 --work=work top`, its run likewise. Nothing about the
-  judged faces moved with it; the probed sequences below carry the new
-  argv verbatim, and the single-library live tests drive the new shape
-  end to end.
+- **The argv shape changed twice.** (2026-11-07, the multi-library
+  face): every project's analyze/elab/run carries `--work=<library>` --
+  a depless single-library project's analyze went from
+  `ghdl -a f.vhd` to `ghdl -a --work=work f.vhd`, its elaboration and
+  run likewise. (2026-11-08, the std face): the `--std=08` pin DROPPED
+  from every argv -- the drive rides ghdl's own default (VHDL-93 on
+  ghdl 6.0.0, probed). WHY: the pin walled 93-written corpora -- the
+  zedboard GRLIB graph died on `redeclaration of procedure "HRead"`
+  (stdio.vhd's legal-in-93 overloads homograph under 08), probed live:
+  the same file compiles clean under the default and `--std=93`, and
+  GRLIB's own ghdl flow passes no std flag at all. Nothing about the
+  judged faces moved with it; the probed sequences below carry the
+  current argv verbatim, and the ghdl live tests drive the shape end to
+  end.
 - **VHDL only**, like every VHDL drive: the `VLOG`/`SYSV` filesets are
   the loud exit-2 refusal, and ghdl's Verilog face is not carried.
 
@@ -763,21 +771,21 @@ face.
 
 | face / fact | argv that wrote it | what ghdl did |
 |------|-----|------|
-| `(assertion failure)`, `./<top>:error: assertion failed`, `./<top>:error: simulation failed` | `ghdl -r --std=08 tb_fail` (same through the drive, which adds `--assert-level=error` after the top) | a violated `assert ... severity failure` stops the run, exit 1 |
-| `(assertion error)` | bare `ghdl -r --std=08 tb_err` | a violated `assert ... severity error`: prints the face and **continues, exit 0** -- bare ghdl's hole. The drive pins `--assert-level=error`, which stops the run (exit 1), and the judge reads the face either way |
-| `(assertion warning)`, `(assertion note)` | `ghdl -r --std=08 tb_warn` | the gentler severities on a continuing run -- continuations, **never judged** |
-| `(report failure)`, `./<top>:error: report failed` | `report ... severity failure;` statement, `ghdl -r --std=08 tb_rep_fail` | a report statement carrying `severity failure` stops the run, exit 1 -- caught by `:error:` |
-| `(report error)` | `report ... severity error;` statement: bare `ghdl -r --std=08 tb_rep_err` | bare ghdl prints and continues, exit 0, **no judged face** (bare-ghdl-only, see limits). Through the drive, `--assert-level=error` stops the run with the `./<top>:error: report failed` face, which judges |
-| `ghdl:error: unknown command option '--assert-level=error'` | `ghdl -r --std=08 --assert-level=error tb` | the assert level is a SIMULATION option: after the toplevel unit only |
-| `ghdl:error: too many unit names for command '-e'` | `ghdl -e --std=08 gate top tb` | `-e` takes ONE unit name. Two names are misread as primary + secondary (`error: cannot find entity or configuration gate`) |
-| `ghdl:error: unknown command '--std=08'` | `ghdl --std=08 -a f.vhd` | ghdl's argv is command-first: `ghdl -a --std=08 f.vhd` |
+| `(assertion failure)`, `./<top>:error: assertion failed`, `./<top>:error: simulation failed` | `ghdl -r tb_fail` (same through the drive, which adds `--assert-level=error` after the top) | a violated `assert ... severity failure` stops the run, exit 1 |
+| `(assertion error)` | bare `ghdl -r tb_err` | a violated `assert ... severity error`: prints the face and **continues, exit 0** -- bare ghdl's hole. The drive pins `--assert-level=error`, which stops the run (exit 1), and the judge reads the face either way |
+| `(assertion warning)`, `(assertion note)` | `ghdl -r tb_warn` | the gentler severities on a continuing run -- continuations, **never judged** |
+| `(report failure)`, `./<top>:error: report failed` | `report ... severity failure;` statement, `ghdl -r tb_rep_fail` | a report statement carrying `severity failure` stops the run, exit 1 -- caught by `:error:` |
+| `(report error)` | `report ... severity error;` statement: bare `ghdl -r tb_rep_err` | bare ghdl prints and continues, exit 0, **no judged face** (bare-ghdl-only, see limits). Through the drive, `--assert-level=error` stops the run with the `./<top>:error: report failed` face, which judges |
+| `ghdl:error: unknown command option '--assert-level=error'` | `ghdl -r --assert-level=error tb` | the assert level is a SIMULATION option: after the toplevel unit only |
+| `ghdl:error: too many unit names for command '-e'` | `ghdl -e gate top tb` | `-e` takes ONE unit name. Two names are misread as primary + secondary (`error: cannot find entity or configuration gate`) |
+| `ghdl:error: unknown command option '--std=08'` | `ghdl --std=08 -a f.vhd` (probed under the pinned-08 era) | ghdl's argv is command-first: every option rides AFTER the command -- the drive's argv does, and there is no std option left to misplace (the std pin dropped, 2026-11-08) |
 | `error: architecture "rtl" of "top" is obsoleted by entity "gate"` | the drive's second run in one output directory, consumer-first blueprint | the stale work library clock: re-analysis obsoletes dependents, `ghdl -e` refuses the unchanged design -- the wipe exists for this |
-| `simulation stopped @0ms` | `ghdl -r --std=08 tb_stop` on a testbench calling `std.env.stop` | a legitimate stop exits 0 -- clean, not a crash-door finding |
-| `cannot find resource library "grlib"` (+ `unit "grlib_pkg" not found in library "grlib"`, `entity "tb" was not analysed`, `ghdl:error: compilation error`) | `ghdl -a --std=08 --work=work tb.vhd` with no `grlib-obj08.cf` in the cwd | the absent-sibling-library face, exit 1 -- four markers on ONE failed spawn; the retry resolves once the provider's row writes `grlib-obj08.cf` (the cross-library deferral face: the drive's multi-library blueprint runs `3 file(s) analyzed in 3 pass(es)`, probed through the drive) |
-| exit 0 end to end, `(report note): SIM PASSED` relayed, two libraries | per-file `ghdl -a --std=08 --work=work tb.vhd` / `--work=work gate.vhd` / `--work=grlib pkg.vhd` (consumers FIRST); then `ghdl -e --std=08 --work=work tb`; then `ghdl -r --std=08 --work=work tb` (same through the drive) | **the multi-library face**: one `<library>-obj08.cf` per `--work` library in the cwd; the consumers' `library grlib;` resolves against the sibling `grlib-obj08.cf` AUTOMATICALLY -- no `-P`/`-L` flag exists or is needed; elab/run pin the top's library and resolve the other library through the sibling file |
-| `error: cannot find entity or configuration tb` (+ `ghdl:error: compilation error`) | `ghdl -e --std=08 tb` with tb analyzed into `--work=counter` -- bare, and pinned to the wrong library (`--work=work`) alike | **the bare-top WORK-only search**, exit 1: even with the library's sibling file in the cwd, a bare (or wrongly pinned) top is searched in the named library alone -- why the drive pins `--work=<the top's library>` on every elaborate and run |
-| exit 0, `(report note): SIM PASSED` | `ghdl -e --std=08 --work=counter tb; ghdl -r --std=08 --work=counter tb` (tb analyzed into `--work=counter`) | the pinned-library elab/run: the top resolves in its OWN library, what it references through the sibling file |
-| `--work=MyLib` writes `mylib-obj08.cf` | `ghdl -a --std=08 --work=MyLib pkg.vhd` | ghdl LOWERCASES the library name in the state file's name, and `library MyLib;` clauses still resolve against it -- why the drive's wipe keys on the `-obj08.cf` suffix alone |
+| `simulation stopped @0ms` | `ghdl -r tb_stop` on a testbench calling `std.env.stop` | a legitimate stop exits 0 -- clean, not a crash-door finding |
+| `cannot find resource library "grlib"` (+ `unit "grlib_pkg" not found in library "grlib"`, `entity "tb" was not analysed`, `ghdl:error: compilation error`) | `ghdl -a --work=work tb.vhd` with no `grlib-obj93.cf` in the cwd | the absent-sibling-library face, exit 1 -- four markers on ONE failed spawn; the retry resolves once the provider's row writes `grlib-obj93.cf` (the cross-library deferral face: the drive's multi-library blueprint runs `3 file(s) analyzed in 3 pass(es)`, probed through the drive) |
+| exit 0 end to end, `(report note): SIM PASSED` relayed, two libraries | per-file `ghdl -a --work=work tb.vhd` / `--work=work gate.vhd` / `--work=grlib pkg.vhd` (consumers FIRST); then `ghdl -e --work=work tb`; then `ghdl -r --work=work tb` (same through the drive; the current argv -- no std flag, the tool default rides) | **the multi-library face**: one `<library>-obj<STD>.cf` per `--work` library in the cwd (`-obj93` under the default the drive rides); the consumers' `library grlib;` resolves against the sibling `grlib-obj93.cf` AUTOMATICALLY -- no `-P`/`-L` flag exists or is needed; elab/run pin the top's library and resolve the other library through the sibling file |
+| `error: cannot find entity or configuration tb` (+ `ghdl:error: compilation error`) | `ghdl -e tb` with tb analyzed into `--work=counter` -- bare, and pinned to the wrong library (`--work=work`) alike | **the bare-top WORK-only search**, exit 1: even with the library's sibling file in the cwd, a bare (or wrongly pinned) top is searched in the named library alone -- why the drive pins `--work=<the top's library>` on every elaborate and run |
+| exit 0, `(report note): SIM PASSED` | `ghdl -e --work=counter tb; ghdl -r --work=counter tb` (tb analyzed into `--work=counter`) | the pinned-library elab/run: the top resolves in its OWN library, what it references through the sibling file |
+| `--work=MyLib` writes `mylib-obj93.cf` | `ghdl -a --work=MyLib pkg.vhd` | ghdl LOWERCASES the library name in the state file's name, and `library MyLib;` clauses still resolve against it -- why the drive's wipe keys on the whole `<library>-obj<STD>.cf` family (every std tag; the drive pins no std) |
 
 Case-exactness is part of the contract: ghdl spells its failures in
 lowercase, so `:ERROR:`, `(ASSERTION FAILURE)`, `(ASSERTION ERROR)`, and
@@ -1012,8 +1020,8 @@ vocabulary, never this one.
   blueprint's single carried library, then nvc's default `work`). The
   ghdl drive consumes the same column on its own resolution (probed
   live on ghdl 6.0.0, the same day): per-file `--work=`, the
-  cwd-sibling `-obj08.cf` files doing the resolution no search flag
-  needed, the wipe taking every `<library>-obj08.cf`, and the same
+  cwd-sibling `-obj<STD>.cf` files doing the resolution no search flag
+  needed, the wipe taking the whole `<library>-obj<STD>.cf` family, and the same
   three-voice ladder on the elaborate/run argv. The vivado drive's
   column rides where its engines serve it (the owner's 2026-11-08
   ruling): the BUILD face's generated script reads each VHDL file back
@@ -1039,12 +1047,14 @@ vocabulary, never this one.
   their filesets as given (`VHDL_FILE` / `VERILOG_FILE` lines, no
   library) -- a multi-library orbit project on quartus stays out of
   scope for v1.
-- **The standards are pinned where the tools pin them** (`--std=08` for
-  ghdl, `--std=2008` for nvc, `-g2012` for iverilog, `-2008` for the
+- **The standards are pinned where the tools pin them** (`--std=2008`
+  for nvc, `-g2012` for iverilog, `-2008` for the
   quartus sim face's vcom -- vcom's spelling of the same VHDL-2008 pin;
   verilator's pinned flags are `--timing` and the face flags -- its
   language setting stays verilator's default in v1; cocotb's backing
-  simulator compiles under ghdl's runner default, no std pin in v1) and
+  simulator compiles under ghdl's runner default, no std pin in v1;
+  ghdl pins NONE -- the drive rides ghdl's own default, VHDL-93 on ghdl
+  6.0.0, since the 2026-11-08 std face: see the ghdl drive) and
   cannot be overridden from the argv yet; the extras reach the drive's
   last step only (`-r` on the VHDL sim faces, `vvp` on iverilog's, the
   model argv on verilator's, the `yosys -p` synth argv on yosys's, the

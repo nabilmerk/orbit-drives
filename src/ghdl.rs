@@ -12,7 +12,7 @@
 //! runs each top and judges the run log against ghdl's probed failure
 //! vocabulary. ghdl carries no search-path flag and needs none: a
 //! consumer's `library <other>;` clause resolves against the sibling
-//! `<other>-obj08.cf` file in the same working directory, automatically
+//! `<other>-obj93.cf` file in the same working directory, automatically
 //! -- ghdl's library search is the cwd alone (probed: move the sibling
 //! into a subdirectory and the resolution dies). The elaborate and run
 //! argv pin the top's library, because ghdl's bare-top commands search
@@ -43,30 +43,32 @@ use crate::proc::{capture, eprint_block, join_log, lossy, print_block};
 /// contract carries no binary-path field.
 pub const GHDL_BIN: &str = "ghdl";
 
-/// The language standard pinned for every ghdl invocation (VHDL-2008).
-/// ghdl's argv is command-first (`ghdl -a --std=08 <file>`): the command
-/// flag leads and this option follows it, never the other way round.
-pub const STD: &str = "--std=08";
-
 /// The simulation option that makes a violated `severity error` stop the
 /// run, probed live on ghdl 6.0.0 (2026-11-07). It is a SIMULATION option:
 /// legal only after the toplevel unit -- placed before it, ghdl answers
 /// `ghdl:error: unknown command option '--assert-level=error'`. It is
 /// defense in depth only: the judge stays the gate, because the face must
-/// land in the log either way.
+/// land in the log either way. The language standard, by contrast, is NOT
+/// pinned: the drive rides ghdl's own default (VHDL-93 on ghdl 6.0.0,
+/// probed) -- the hardcoded `--std=08` pin walled 93-written corpora
+/// (the GRLIB stdio `redeclaration of procedure "HRead"` homograph face,
+/// probed live 2026-11-08: the file compiles clean under the default and
+/// dies under `--std=08`), while GRLIB's own ghdl flow passes no std flag
+/// at all.
 pub const ASSERT_LEVEL: &str = "--assert-level=error";
 
-/// The suffix of the library state file ghdl writes into the working
-/// directory: `<library>-obj08.cf` (ghdl names the file after the
-/// standard -- `-obj08` under the drive's pinned `--std=08`), one file
-/// per analyzed library, `work-obj08.cf` beside `grlib-obj08.cf` on a
-/// multi-library blueprint. It is ghdl's clock, one clock per library.
+/// Whether a file name in the working directory is one of ghdl's library
+/// state files: the `<library>-obj<STD>.cf` family -- ghdl tags the file
+/// with the standard it analyzed under (`-obj08` under `--std=08`,
+/// `-obj93` under the tool default the drive now rides, probed live on
+/// ghdl 6.0.0, 2026-11-08), one file per analyzed library,
+/// `work-obj93.cf` beside `grlib-obj93.cf` on a multi-library blueprint.
+/// It is ghdl's clock, one clock per library.
 ///
 /// Probed live on ghdl 6.0.0 (2026-11-07): the library name lands
-/// LOWERCASED in the file name -- `--work=MyLib` writes `mylib-obj08.cf`
+/// LOWERCASED in the file name -- `--work=MyLib` writes `mylib-obj93.cf`
 /// -- while the blueprint's `library MyLib;` clauses still resolve
-/// against it, so the drive's wipe keys on the suffix alone and never
-/// needs the name's case.
+/// against it, so the drive's wipe never needs the name's case.
 ///
 /// Orbit's output directory persists across runs, and a stale library
 /// file turns this drive's own re-analysis against itself: in the
@@ -76,15 +78,14 @@ pub const ASSERT_LEVEL: &str = "--assert-level=error";
 /// design (`error: architecture "rtl" of "top" is obsoleted by entity
 /// "gate"`, probed live on ghdl 6.0.0, 2026-11-07). Correctness before
 /// incrementality in v1: every drive starts from empty libraries -- and
-/// the wipe covers EVERY `<library>-obj08.cf` in the working directory,
-/// not just work's, because a library a PREVIOUS blueprint analyzed but
-/// this one no longer names must die too, or a `library <other>;` clause
-/// would silently resolve against its stale units (the same stance as
-/// the nvc drive's marker scan). Files of other standards
-/// (`<library>-obj05.cf`) are not this drive's state: it pins `--std=08`
-/// on every spawn, and ghdl consults only the matching file.
-pub const LIBRARY_FILE_SUFFIX: &str = "-obj08.cf";
-
+/// the wipe takes EVERY `<library>-obj<STD>.cf` in the working directory
+/// -- the whole FAMILY, every std tag -- not just work's, because a
+/// library a PREVIOUS blueprint analyzed but this one no longer names
+/// must die too, or a `library <other>;` clause would silently resolve
+/// against its stale units (the same stance as the nvc drive's marker
+/// scan). The family key is what keeps the no-pin face honest across a
+/// std drift: a `-obj08.cf` left by a pre-ruling drive is ghdl's state
+/// all the same and dies with the rest.
 /// ghdl's default work library name (`work`), and the drive's last resort
 /// when it must name the library that holds the top: see [`top_library`].
 pub const DEFAULT_LIBRARY: &str = "work";
@@ -262,7 +263,8 @@ pub fn drive(request: &Drive, mode: Mode) -> Result<(), DriveError> {
     // a loud usage error instead of a deferral-loop residual.
     capture(GHDL_BIN, Command::new(GHDL_BIN).arg("--version")).map_err(DriveError::Spawn)?;
 
-    // Run-scoped library state: see `LIBRARY_FILE_SUFFIX`. Every drive
+    // Run-scoped library state: see the `<library>-obj<STD>.cf` family
+    // (the `is_ghdl_library_file` scan). Every drive
     // starts from empty libraries, so a second run in the same persistent
     // output directory cannot obsolete its own design, and no consumer
     // resolves a library this blueprint no longer analyzes.
@@ -400,8 +402,9 @@ pub fn drive(request: &Drive, mode: Mode) -> Result<(), DriveError> {
     }
 }
 
-/// Run one elaborated top and capture its log: `ghdl -r --std=08
-/// --work=<the top's library> <top> --assert-level=error <extras>`.
+/// Run one elaborated top and capture its log: `ghdl -r
+/// --work=<the top's library> <top> --assert-level=error <extras>` (no
+/// std pin: ghdl's own default rides, see [`ASSERT_LEVEL`]).
 fn run_top(
     top: &str,
     library: &str,
@@ -442,9 +445,13 @@ fn analyze_once(file: &Path, library: &str) -> Result<(), String> {
 }
 
 /// The leading block every ghdl argv carries: the command flag first
-/// (`-a` / `-e` / `-r` -- ghdl's argv is command-first, `ghdl --std=08
-/// -a f.vhd` answers `ghdl:error: unknown command '--std=08'`), then the
-/// global pins: the std and the work library.
+/// (`-a` / `-e` / `-r` -- ghdl's argv is command-first), then the work
+/// library pin. NO std flag: the drive rides ghdl's own default
+/// (VHDL-93 on ghdl 6.0.0, probed) -- the hardcoded `--std=08` pin walled
+/// 93-written corpora (the GRLIB stdio homograph face, probed live
+/// 2026-11-08: `redeclaration of procedure "HRead"`, exit 1, on a file
+/// the default compiles clean), while GRLIB's own ghdl flow passes no
+/// std flag at all.
 ///
 /// The `--work` value is consumed verbatim from the blueprint's library
 /// column on the analyze face (the §25 ruling: the library name is the
@@ -452,11 +459,7 @@ fn analyze_once(file: &Path, library: &str) -> Result<(), String> {
 /// the elaborate and run faces it is the top's library, resolved by
 /// [`top_library`].
 fn command_args(command: &str, library: &str) -> Vec<String> {
-    vec![
-        command.to_string(),
-        STD.to_string(),
-        format!("--work={library}"),
-    ]
+    vec![command.to_string(), format!("--work={library}")]
 }
 
 /// The library that holds the tops -- the `--work` pin on the elaborate
@@ -501,9 +504,18 @@ fn top_library(project_library: Option<&str>, entries: &[Entry]) -> String {
     }
 }
 
+/// Whether `name` is one of ghdl's library state files: the
+/// `<library>-obj<STD>.cf` family -- a `.cf` file carrying ghdl's `-obj`
+/// tag, whatever std wrote it (the drive pins no std, so the family --
+/// every tag -- is its clock; a `-obj08.cf` left by a pre-ruling drive
+/// dies beside a fresh `-obj93.cf`).
+fn is_ghdl_library_file(name: &str) -> bool {
+    name.ends_with(".cf") && name.contains("-obj")
+}
+
 /// Remove every ghdl library state file under `dir` -- the drive's output
 /// directory, passed as the cwd (`.`). A file is ghdl's when its name
-/// ends with [`LIBRARY_FILE_SUFFIX`]: one `<library>-obj08.cf` per
+/// is one of ghdl's library state files (see `is_ghdl_library_file`): one
 /// analyzed library, the name lowercased by ghdl (probed), so the suffix
 /// alone is the honest key. The scan -- not the blueprint's library list
 /// -- is what makes the wipe honest: a library a PREVIOUS drive analyzed
@@ -511,8 +523,9 @@ fn top_library(project_library: Option<&str>, entries: &[Entry]) -> String {
 /// `library <other>;` clause would silently resolve against its stale
 /// units. A directory named like a library file is not ghdl's state
 /// (ghdl's state is files), and neither is a file of another standard
-/// (`<library>-obj05.cf`): the drive pins `--std=08`, and ghdl consults
-/// only the matching file.
+/// of another std tag (`<library>-obj05.cf`): the whole family is the
+/// drive's state -- a tag a previous drive (or std) wrote dies with the
+/// rest, so no stale file can serve units to a clause.
 fn wipe_libraries(dir: &Path) -> Result<(), String> {
     let unreadable = |e: std::io::Error| {
         format!(
@@ -524,7 +537,7 @@ fn wipe_libraries(dir: &Path) -> Result<(), String> {
     for entry in fs::read_dir(dir).map_err(unreadable)? {
         let path = entry.map_err(unreadable)?.path();
         if let Some(name) = path.file_name().and_then(|name| name.to_str()) {
-            if path.is_file() && name.ends_with(LIBRARY_FILE_SUFFIX) {
+            if path.is_file() && is_ghdl_library_file(name) {
                 victims.push(path);
             }
         }
@@ -751,29 +764,24 @@ tb_err.vhd:9:5:@0ms:(report note): simulation continued
     #[test]
     fn every_argv_leads_with_the_command_then_the_global_pins() {
         // The probed command-first shape: the command flag leads, the
-        // global pins follow (`ghdl --std=08 -a f.vhd` answers
-        // `ghdl:error: unknown command '--std=08'`), and the work library
-        // rides every face -- analyze, elaborate, run alike.
+        // work library pin follows, and NO std flag rides -- the drive
+        // takes ghdl's own default (VHDL-93 on ghdl 6.0.0, probed): the
+        // hardcoded `--std=08` walled 93-written corpora (the GRLIB
+        // stdio homograph face, probed live 2026-11-08: `redeclaration of
+        // procedure "HRead"`, exit 1, on a file the default compiles
+        // clean).
         assert_eq!(
             command_args("-a", "grlib"),
-            vec![
-                "-a".to_string(),
-                "--std=08".to_string(),
-                "--work=grlib".to_string(),
-            ]
+            vec!["-a".to_string(), "--work=grlib".to_string()]
         );
         assert_eq!(
             command_args("-e", "work"),
-            vec![
-                "-e".to_string(),
-                "--std=08".to_string(),
-                "--work=work".to_string(),
-            ]
+            vec!["-e".to_string(), "--work=work".to_string()]
         );
         // The library name rides verbatim -- orbit's planner owns it (the
         // §25 ruling); the drive never normalizes it to ghdl's default.
-        assert_eq!(command_args("-r", "MyLib")[2], "--work=MyLib");
-        assert_eq!(command_args("-r", "work")[2], "--work=work");
+        assert_eq!(command_args("-r", "MyLib")[1], "--work=MyLib");
+        assert_eq!(command_args("-r", "work")[1], "--work=work");
     }
 
     #[test]
@@ -807,12 +815,16 @@ tb_err.vhd:9:5:@0ms:(report note): simulation continued
     #[test]
     fn the_wipe_takes_every_library_file_and_nothing_else() {
         let dir = temp_dir("wipe-libraries");
-        let work = dir.join("work-obj08.cf");
-        let grlib = dir.join("grlib-obj08.cf");
-        let lowercased = dir.join("mylib-obj08.cf");
-        let foreign_std = dir.join("work-obj05.cf");
+        // The family, every std tag: the fresh `-obj93.cf` files the
+        // no-pin drive writes AND a `-obj08.cf` left by a pre-ruling
+        // drive -- ghdl's state is the whole family, because the drive
+        // pins no std and a stale file of ANY tag could serve units.
+        let work = dir.join("work-obj93.cf");
+        let grlib = dir.join("grlib-obj93.cf");
+        let lowercased = dir.join("mylib-obj93.cf");
+        let legacy_std = dir.join("work-obj08.cf");
         let keep = dir.join("keep.txt");
-        for file in [&work, &grlib, &lowercased, &foreign_std, &keep] {
+        for file in [&work, &grlib, &lowercased, &legacy_std, &keep] {
             fs::write(file, "state").unwrap();
         }
         // A directory named like a library file is not ghdl's state:
@@ -827,15 +839,16 @@ tb_err.vhd:9:5:@0ms:(report note): simulation continued
         assert!(
             !lowercased.exists(),
             "the lowercased name ghdl writes must die (probed: --work=MyLib writes \
-             mylib-obj08.cf)"
+             mylib-obj93.cf under the default std)"
         );
         assert!(
-            foreign_std.exists(),
-            "a foreign standard's file is not this drive's state"
+            !legacy_std.exists(),
+            "a pre-ruling std tag is ghdl's state all the same: the family scan takes \
+             every -obj*.cf"
         );
         assert!(
             keep.exists(),
-            "a file without the suffix is not ghdl's state"
+            "a file without the .cf/-obj shape is not ghdl's state"
         );
         assert!(
             imposter.exists(),
