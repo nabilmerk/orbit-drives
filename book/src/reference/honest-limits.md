@@ -65,8 +65,8 @@
   - **the `-L`-before-top order on the vsim argv** (`vsim -c -do "run
     -all; quit" -L work work.<top>`): probe the documented argv; if
     vsim wants the `-L` pins after the design (or extra `-L` pins per
-    dependency library), the argv shape moves and the README records
-    it.
+    dependency library), the argv shape moves and the Vivado drive page
+    records it.
   - **the read/write-settings flags** (`--read_settings_files=off
     --write_settings_files=off`): probe whether the generated `.qsf` is
     actually read under them; if not, the invocation moves to the
