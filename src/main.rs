@@ -15,6 +15,12 @@
 //! drive's last tool argv verbatim. With no `--top`, the drive runs the
 //! testbench orbit exports as `$ORBIT_TB_NAME` (empty in all-mode, which
 //! counts as absent); it is a loud exit-2 when neither names a top.
+//!
+//! No absolute paths anywhere: every tool binary resolves by its bare
+//! name through PATH (or its env hook, `VIVADO_BIN`/`QUARTUS_BIN`), so
+//! the one binary builds and judges the same on linux, windows and macos
+//! -- the live tool gates are the only platform-dependent part, and they
+//! stay skipped by design.
 
 use std::env;
 use std::path::PathBuf;
