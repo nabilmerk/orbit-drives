@@ -14,6 +14,7 @@
 //! coroutine, plus its assert-fail variant.
 
 use std::fs;
+#[cfg(unix)]
 use std::os::unix::fs::PermissionsExt;
 use std::path::{Path, PathBuf};
 use std::process::Command;
@@ -273,6 +274,11 @@ fn the_real_cocotb_drive_requires_the_test_module_before_any_drive() {
     fs::remove_dir_all(&out).ok();
 }
 
+// The shim is a POSIX mechanism whole -- a `#!/bin/sh` script, the exec
+// bit, and PATH resolving the bare name -- so the witness is unix-scoped;
+// windows compiles the test out (its subject, the probe's usage error, is
+// platform-neutral and covered by the drive's own unit tests).
+#[cfg(unix)]
 #[test]
 fn a_broken_cocotb_install_is_a_loud_usage_error_before_any_runner_script() {
     // The identity probe's exit is a witness (the README promise: a
