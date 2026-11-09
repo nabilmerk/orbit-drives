@@ -1,10 +1,9 @@
 # Examples
 
 The worked invocations, one section per face family. Wire the target
-fragment once; every drive then runs as an orbit target. The drives' own
-flags (`--top`, `--part`, `--test-module`) ride the orbit command before
-the `--` separator; everything after `--` is a tool extra and lands
-verbatim on the drive's LAST tool argv.
+fragment once; every drive then runs as an orbit target. Flag placement is per target: the cocotb drive takes its flags before
+`--`; the build targets (vivado-build, quartus-build) take `--part` and
+`--top` after `--` — each example below shows its target's shipped form.
 
 ## Wiring the fragment in
 

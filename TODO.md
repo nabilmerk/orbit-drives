@@ -12,3 +12,12 @@
   Windows/macOS Vivado launch recipes are unprobed.
 - the cross-platform live-tool matrix: the gated live tests per OS,
   once vendor tools exist on each.
+
+## Parked
+
+- the honest-limits duplicated run-log bullet (a merge-candidate on the
+  next touch).
+- the quickstart prose-vs-link polish.
+- the mdbook install caching (a future CI pass).
+- the action/runner version-bump pass.
+- the cocotb PYTHON_BIN Windows face (the loud exit-2 by design).

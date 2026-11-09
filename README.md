@@ -35,7 +35,7 @@ the first run end to end.
 | yosys | yosys | yes | yes | yes |
 | vivado | Vivado xsim/synth | yes (probed) | untested | untested |
 | quartus | Quartus Questa | untested | untested | untested |
-| cocotb | cocotb + any simulator | yes | yes* | yes* |
+| cocotb | cocotb + any simulator | yes | no (POSIX-only) | yes* |
 
 `*` = the tool builds exist; the drive's recipe is probed on Linux only.
 The probed facts and the honest limits live in the

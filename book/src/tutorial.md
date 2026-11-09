@@ -38,8 +38,10 @@ runs the testbench.
 
 The drive prints the tool's log, then one verdict line:
 
-- `testbench: pass` — the log carries no probed failure face AND the tool exited 0.
-- `testbench: fail (…)` — the log carries a failure face OR the exit was nonzero.
+- `orbit-drives: nvc: sim: testbench: pass` — the log carries no probed
+  failure face AND the tool exited 0.
+- `orbit-drives: <tool>: <label>: <top>: fail (<reason>)` — the log carries
+  a failure face OR the exit was nonzero.
 
 Either witness convicts: the judge exists because the exits lie — bare ghdl exits
 0 on a violated `severity error`; a killed simulation can leave no face at all.

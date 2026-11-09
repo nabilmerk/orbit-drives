@@ -150,7 +150,7 @@ never judges a log -- and the uppercase `ERROR:` faces of the compile and
 elaboration stages are deliberately outside the vocabulary, because those
 stages gate on their honest exits. A testbench's own report note that
 LEADS its line with a face shape (`Failure: retrying`) convicts the run;
-mid-line prose never does. The recipe env (above) rides every spawn, set
+mid-line prose never does. The recipe env (see the Vivado drive page) rides every spawn, set
 by the drive; `.Xil/` and the stage logs (`xvhdl.log`, `xvlog.log`,
 `xsim.log`, `xsim.jou`) land in the working directory and are the tools'
 own scratch.

@@ -52,7 +52,7 @@
   - **vsim's exit honesty** (nonzero on a failing sim): probe with a
     severity-failure testbench BEFORE trusting the exit witness alone;
     if vsim lies the way xsim lies, the vocabulary becomes the
-    load-bearing gate and the README records it.
+    load-bearing gate and the Vivado drive page records it.
   - **the vocabulary itself** (line-start `Fatal:` / `Error:` /
     `Failure:`, ModelSim-family): probe the real failing faces (severity
     failure, severity error, an elaboration refusal) and rewrite
