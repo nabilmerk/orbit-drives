@@ -1241,7 +1241,9 @@ ERROR: Please check the snapshot name which is created during 'xelab',the curren
         // The probed recipe, as env pairs: LC_ALL always set (the env's
         // own wins, the probed locale otherwise), LOCPATH defaulted from
         // HOME, the LD_LIBRARY_PATH leg derived from the resolved
-        // install.
+        // install. The derived legs ride Path::join, so the expectations
+        // derive the same way -- the platform's own separator, never a
+        // hardcoded one (the derivation is what is pinned).
         let recipe = Recipe {
             lc_all: None,
             locpath: None,
@@ -1251,10 +1253,20 @@ ERROR: Please check the snapshot name which is created during 'xelab',the curren
         let vivado = Path::new("/opt/2025.2.1/Vivado/bin/vivado");
         let pairs = recipe.env_pairs(vivado);
         assert_eq!(pairs[0], ("LC_ALL".to_string(), "en_US.UTF-8".into()));
-        assert!(pairs.contains(&("LOCPATH".to_string(), "/home/tester/.local/locale".into())));
+        assert!(pairs.contains(&(
+            "LOCPATH".to_string(),
+            Path::new("/home/tester")
+                .join(".local")
+                .join("locale")
+                .into()
+        )));
         assert!(pairs.contains(&(
             "LD_LIBRARY_PATH".to_string(),
-            "/opt/2025.2.1/Vivado/lib/lnx64.o/SuSE".into()
+            Path::new("/opt/2025.2.1/Vivado")
+                .join("lib")
+                .join("lnx64.o")
+                .join("SuSE")
+                .into()
         )));
 
         // The environment's own legs win over every default.
