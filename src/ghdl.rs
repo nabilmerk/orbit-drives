@@ -57,6 +57,77 @@ pub const GHDL_BIN: &str = "ghdl";
 /// at all.
 pub const ASSERT_LEVEL: &str = "--assert-level=error";
 
+/// The env override for the analysis flags every spawn carries
+/// (`ORBIT_DRIVES_GHDL_FLAGS`): the value is whitespace-split and rides
+/// each spawn's argv verbatim, right after the command. Unset or empty:
+/// nothing rides.
+///
+/// WHY the drive carries this face: vendor simulation libraries pin
+/// their own analysis flags, and ghdl re-checks flag consistency at
+/// every LOAD of an analyzed unit -- a unit compiled under `-fsynopsys`
+/// reparses from source on a flagless load and dies on the very face
+/// the flag exists to allow (`use of synopsys package "std_logic_signed"
+/// needs the -fsynopsys option`, probed live on ghdl 6.0.0, 2026-11-08,
+/// the Xilinx unisim tree -- DCM, BUFGMUX and the RAM wrappers all pin
+/// the Synopsys packages). The probed corpus case: the GRLIB leon3
+/// zedboard workspace against Vivado's unisim -- `orbit-drives ghdl`
+/// with `ORBIT_DRIVES_GHDL_FLAGS="-fpsl -frelaxed -fsynopsys
+/// -fexplicit"` and the unisim tree pre-analyzed under the same flags
+/// (see the workspace's lift record) carries the whole design.
+/// Upstream there is no config or target flag face at all (chaseruskin/
+/// orbit#25's class) -- until one lands, the env is the drive's honest
+/// interim: the user names the corpus's flags, the drive carries them
+/// on every spawn.
+pub const FLAGS_ENV: &str = "ORBIT_DRIVES_GHDL_FLAGS";
+
+/// The resolver behind the flag ride, pure so the tests can pin both
+/// arms without touching the process env. Whitespace-split -- ghdl's
+/// own multi-flag spellings ride as separate argv entries.
+fn flags_from(value: Option<&str>) -> Vec<String> {
+    match value {
+        Some(v) => v.split_whitespace().map(str::to_string).collect(),
+        None => Vec::new(),
+    }
+}
+
+fn extra_flags() -> Vec<String> {
+    flags_from(std::env::var(FLAGS_ENV).ok().as_deref())
+}
+
+/// The env override for the run-time assertion level
+/// (`ORBIT_DRIVES_GHDL_ASSERT_LEVEL`): the value rides as
+/// `--assert-level=<value>` in the run argv's post-top position (ghdl
+/// rejects the option anywhere earlier; probed live). Unset or empty:
+/// the default pin, `error`.
+///
+/// WHY the drive carries this face: the pin makes ghdl's lying exit
+/// honest for typical corpora -- ghdl exits 0 on violated severity
+/// error checks, so the drive raises the level to make ANY error
+/// assertion halt the sim and convict the exit. But the LEVEL is a
+/// corpus property: a corpus whose tolerated infrastructure notes are
+/// severity-error assertions needs the level at `failure` -- the probed
+/// case (2026-11-08, the GRLIB leon3 zedboard systest): the AHB-to-AXI
+/// bridge prints a severity-error note at init for a translation path
+/// the design never exercises, and the level-error pin halted the sim
+/// at 0 ms before the systest ran. ghdl's own duplicate-option
+/// precedence is last-wins (probed: `--assert-level=failure
+/// --assert-level=error` halts at the error), so this face cannot ride
+/// the earlier [`FLAGS_ENV`] position -- it owns its slot.
+pub const ASSERT_LEVEL_ENV: &str = "ORBIT_DRIVES_GHDL_ASSERT_LEVEL";
+
+/// The resolver behind the assert-level override, pure so the tests can
+/// pin both arms without touching the process env.
+fn assert_level_from(value: Option<&str>) -> String {
+    match value.map(str::trim) {
+        Some(v) if !v.is_empty() => format!("--assert-level={v}"),
+        _ => ASSERT_LEVEL.to_string(),
+    }
+}
+
+fn assert_level_arg() -> String {
+    assert_level_from(std::env::var(ASSERT_LEVEL_ENV).ok().as_deref())
+}
+
 /// Whether a file name in the working directory is one of ghdl's library
 /// state files: the `<library>-obj<STD>.cf` family -- ghdl tags the file
 /// with the standard it analyzed under (`-obj08` under `--std=08`,
@@ -417,7 +488,7 @@ fn run_top(
     let mut run = Command::new(GHDL_BIN);
     run.args(command_args("-r", library))
         .arg(top)
-        .arg(ASSERT_LEVEL)
+        .arg(assert_level_arg())
         .args(extra);
     let output = capture(GHDL_BIN, &mut run).map_err(DriveError::Spawn)?;
     let log = join_log(lossy(&output.stdout), lossy(&output.stderr));
@@ -459,7 +530,10 @@ fn analyze_once(file: &Path, library: &str) -> Result<(), String> {
 /// the elaborate and run faces it is the top's library, resolved by
 /// [`top_library`].
 fn command_args(command: &str, library: &str) -> Vec<String> {
-    vec![command.to_string(), format!("--work={library}")]
+    let mut args = vec![command.to_string()];
+    args.extend(extra_flags());
+    args.push(format!("--work={library}"));
+    args
 }
 
 /// The library that holds the tops -- the `--work` pin on the elaborate
@@ -782,6 +856,43 @@ tb_err.vhd:9:5:@0ms:(report note): simulation continued
         // §25 ruling); the drive never normalizes it to ghdl's default.
         assert_eq!(command_args("-r", "MyLib")[1], "--work=MyLib");
         assert_eq!(command_args("-r", "work")[1], "--work=work");
+    }
+
+    #[test]
+    fn the_flags_env_override_splits_and_the_default_survives() {
+        // The vendor-flag face (see FLAGS_ENV): whitespace-split entries
+        // ride as separate argv tokens; unset, empty, and blank ride
+        // nothing at all. Pure resolver -- no process-env mutation.
+        assert_eq!(
+            flags_from(Some("-fsynopsys -fexplicit")),
+            vec!["-fsynopsys".to_string(), "-fexplicit".to_string()]
+        );
+        assert_eq!(
+            flags_from(Some("  -frelaxed   -fpsl  ")),
+            vec!["-frelaxed".to_string(), "-fpsl".to_string()]
+        );
+        assert_eq!(flags_from(None), Vec::<String>::new());
+        assert_eq!(flags_from(Some("")), Vec::<String>::new());
+        assert_eq!(flags_from(Some("   ")), Vec::<String>::new());
+    }
+
+    #[test]
+    fn the_assert_level_env_override_replaces_the_pin_and_the_default_survives() {
+        // The assert-level face (see ASSERT_LEVEL_ENV): a non-empty
+        // override rides verbatim in the run argv's post-top slot;
+        // unset, empty, and blank fall back to the default pin. Pure
+        // resolver -- no process-env mutation.
+        assert_eq!(
+            assert_level_from(Some("failure")),
+            "--assert-level=failure"
+        );
+        assert_eq!(
+            assert_level_from(Some("  note  ")),
+            "--assert-level=note"
+        );
+        assert_eq!(assert_level_from(None), ASSERT_LEVEL);
+        assert_eq!(assert_level_from(Some("")), ASSERT_LEVEL);
+        assert_eq!(assert_level_from(Some("   ")), ASSERT_LEVEL);
     }
 
     #[test]
