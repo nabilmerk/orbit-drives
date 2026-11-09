@@ -1,0 +1,7 @@
+[book]
+title = "The orbit-drives Guide"
+authors = ["nabilmerk"]
+src = "src"
+
+[output.html]
+git-repository-url = "https://github.com/nabilmerk/orbit-drives"
