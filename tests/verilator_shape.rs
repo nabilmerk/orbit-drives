@@ -234,8 +234,13 @@ endmodule
         String::from_utf8_lossy(&run.stderr)
     );
     let stdout = String::from_utf8_lossy(&run.stdout);
+    // The %Fatal face drifts by verilator version: the probed 5.032 prints
+    // `%Fatal: tb_fatal.sv:8: Assertion failed in tb_fatal: the design is
+    // wrong`, while distro builds (noble, CI) prepend a `[<time>] ` prefix
+    // and scope the failure as `TOP.tb_fatal`. Pin the stable core only.
     assert!(
-        stdout.contains("%Fatal: tb_fatal.sv:8: Assertion failed in tb_fatal: the design is wrong"),
+        stdout.contains("%Fatal: tb_fatal.sv:8: Assertion failed")
+            && stdout.contains("the design is wrong"),
         "the relayed log should carry the probed face verbatim:\n{stdout}"
     );
     assert!(
