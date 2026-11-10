@@ -30,7 +30,7 @@
 - Consumes: approved text from spec §Decision (verbatim below).
 - Produces: nothing downstream depends on this.
 
-- [ ] **Step 1: Replace the intro paragraph**
+- [x] **Step 1: Replace the intro paragraph**
 
 Replace exactly:
 
@@ -50,12 +50,12 @@ your HDL, and orbit-drives runs it everywhere.
 
 The `# orbit-drives` title above and the "The full guide:" line below stay untouched.
 
-- [ ] **Step 2: Verify**
+- [x] **Step 2: Verify**
 
 Run: `head -8 README.md && ! grep -q "probed failure" README.md && echo CLEAN`
 Expected: new paragraph visible, `CLEAN` printed.
 
-- [ ] **Step 3: Commit**
+- [x] **Step 3: Commit**
 
 ```bash
 git add README.md
@@ -73,7 +73,7 @@ git commit -m "docs: the readme leads with the objective -- no mechanics in the 
 - Consumes: same approved text as Task 1 (verbatim below).
 - Produces: nothing downstream.
 
-- [ ] **Step 1: Replace the intro paragraph**
+- [x] **Step 1: Replace the intro paragraph**
 
 Replace exactly:
 
@@ -93,12 +93,12 @@ your HDL, and orbit-drives runs it everywhere.
 
 The `# The orbit-drives Guide` title and the "Start with the Tutorial…" line stay untouched.
 
-- [ ] **Step 2: Verify**
+- [x] **Step 2: Verify**
 
 Run: `head -8 book/src/index.md && ! grep -q "probed failure" book/src/index.md && echo CLEAN`
 Expected: new paragraph visible, `CLEAN` printed.
 
-- [ ] **Step 3: Commit**
+- [x] **Step 3: Commit**
 
 ```bash
 git add book/src/index.md
@@ -116,7 +116,7 @@ git commit -m "docs: the book landing leads with the objective -- same benefit t
 - Consumes: approved sentence from spec §Decision.
 - Produces: Task 4 uses the identical sentence for the GitHub About.
 
-- [ ] **Step 1: Replace the description value**
+- [x] **Step 1: Replace the description value**
 
 Replace exactly:
 
@@ -130,12 +130,12 @@ with exactly:
 description = "Stop maintaining scripts around your EDA tools. Write HDL, let orbit-drives run it."
 ```
 
-- [ ] **Step 2: Verify the manifest still parses**
+- [x] **Step 2: Verify the manifest still parses**
 
 Run: `cargo build 2>&1 | tail -3`
 Expected: build finishes (incremental; no compile errors).
 
-- [ ] **Step 3: Commit**
+- [x] **Step 3: Commit**
 
 ```bash
 git add Cargo.toml
@@ -152,17 +152,17 @@ git commit -m "chore: the cargo description sells the objective -- one sentence"
 **Interfaces:**
 - Consumes: the Task 3 sentence, verbatim; all three local commits already pushed/committed on `main`.
 
-- [ ] **Step 1: Update the repo description**
+- [x] **Step 1: Update the repo description**
 
 ```bash
 gh repo edit --description "Stop maintaining scripts around your EDA tools. Write HDL, let orbit-drives run it."
 ```
 
-- [ ] **Step 2: Verify**
+- [x] **Step 2: Verify**
 
 Run: `gh repo view --json description --jq .description`
 Expected: `Stop maintaining scripts around your EDA tools. Write HDL, let orbit-drives run it.`
 
-- [ ] **Step 3: Report**
+- [x] **Step 3: Report**
 
 No commit — nothing local changed. Include the verified description in the final report.
