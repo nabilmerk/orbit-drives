@@ -53,6 +53,14 @@ cargo test
 
 The per-OS matrix runs on CI for `src/**`, `tests/**`, `Cargo.toml` changes.
 
+The tools themselves run on CI too: the [tools workflow](.github/workflows/tools.yml)
+installs every drive's tool per OS — a [Docker image](.github/docker/linux.Dockerfile)
+on ghcr.io for Linux, setup scripts for
+[Windows](.github/scripts/setup-windows.ps1) and
+[macOS](.github/scripts/setup-macos.sh) — asserts each one answers, and runs
+the gated tests. The matrix re-probes weekly, so a vanished package or a
+broken recipe turns CI red.
+
 ## Status
 
 - [TODO.md](TODO.md) — the standing deferred items.
