@@ -10,12 +10,18 @@ RUN apt-get update \
       iverilog verilator yosys \
  && rm -rf /var/lib/apt/lists/*
 
-# nvc — the official ubuntu-24.04 .deb from the nickg/nvc release (apt pulls
-# its declared deps, e.g. llvm, from the normal repos).
+# nvc — the official ubuntu-24.04 .deb from the nickg/nvc release. Its own
+# Depends line (dpkg -I, r1.23.1) is installed explicitly first: apt's
+# transitive resolution reported "libdw1t64 not installable" inside the
+# container even though the package exists in noble (all four named deps
+# verified present, 2026-11-10) -- naming them makes any real gap loud.
 ARG NVC_VERSION=1.23.1
-RUN curl -fsSL -o /tmp/nvc.deb \
+RUN apt-get update \
+ && apt-get install -y --no-install-recommends \
+      libdw1t64 libllvm18 libreadline8t64 libtcl8.6 libffi8 binutils \
+ && curl -fsSL -o /tmp/nvc.deb \
       "https://github.com/nickg/nvc/releases/download/r${NVC_VERSION}/nvc_${NVC_VERSION}-1_amd64_ubuntu-24.04.deb" \
- && apt-get install -y /tmp/nvc.deb \
+ && dpkg -i /tmp/nvc.deb \
  && rm /tmp/nvc.deb \
  && nvc --version
 

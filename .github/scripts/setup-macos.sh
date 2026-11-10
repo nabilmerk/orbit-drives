@@ -10,9 +10,10 @@ brew install llvm icarus-verilog verilator yosys
 # --strip-components=1 drops bin/ghdl straight onto /usr/local/bin. gh release
 # download uses the workflow's GH_TOKEN -- anonymous api.github.com calls from
 # shared runner IPs hit the rate limit (second run's verdict).
-gh release download --repo ghdl/ghdl --pattern 'ghdl-llvm-*-macos15-aarch64.tar.gz' --latest -O /tmp/ghdl.tgz
-sudo tar -xzf /tmp/ghdl.tgz -C /usr/local --strip-components=1
-rm /tmp/ghdl.tgz
+# gh release download has no -O flag: it lands files in --dir.
+gh release download --repo ghdl/ghdl --pattern 'ghdl-llvm-*-macos15-aarch64.tar.gz' --latest -D /tmp/ghdl-dl
+sudo tar -xzf /tmp/ghdl-dl/ghdl-llvm-*-macos15-aarch64.tar.gz -C /usr/local --strip-components=1
+rm -rf /tmp/ghdl-dl
 
 # cocotb pinned to the probed version (--break-system-packages is a no-op
 # when no EXTERNALLY-MANAGED marker exists). COCOTB_IGNORE_PYTHON_REQUIRES

@@ -99,3 +99,23 @@ CI with the per-OS sets, image on ghcr, weekly re-probe.
 Plain messages, no Claude co-author. Finish = merge to main + push, then
 dispatch and watch the first run; fix forward if a script trips (that is
 the weekly cron's job going forward).
+
+## Verdicts and amendments (CI rounds 1–3, 2026-11-10)
+
+Each CI run produced facts that amended the design above. Recorded here
+so the spec stays the truth, not the first draft.
+
+| # | Verdict (evidence) | Amendment |
+|---|---|---|
+| 1 | gha cache export rejected: `Cache export is not supported for the docker driver` | `image` job gains `docker/setup-buildx-action@v3` (container driver) before build-push |
+| 2 | apt: `Unable to locate package nvc` — nvc is NOT in noble; the earlier packages.ubuntu.com "200" was a soft-404 ("No such package" page, content never read) | nvc comes from nickg's official `nvc_1.23.1-1_amd64_ubuntu-24.04.deb` (pinned `ARG NVC_VERSION`); registry checks must read page content, not status codes |
+| 3 | apt: deb's `libdw1t64` "not installable" inside the container although the deb's four named deps all exist in noble (content-verified) | deb's own Depends list installed explicitly by name (fresh `apt-get update` layer), then `dpkg -i` — a real gap now names itself |
+| 4 | windows: anonymous `api.github.com` from shared runner IPs → `API rate limit exceeded` (also explains run 1's silent 27 s window) | all release fetches go through token-authenticated `gh release download --latest` (`GH_TOKEN: ${{ github.token }}` on the script steps); "latest" semantics kept per the pinning policy |
+| 5 | windows/macos: `gh release download` has no `-O` flag (that's curl) | files land in `-D/--dir`, then resolved by glob |
+| 6 | macos: `ghdl: command not found` — the ghdl macOS tarball is NESTED (`ghdl-llvm-*/bin/…`), so `-C /usr/local` buried the binary | extract with `--strip-components=1` (layout verified against the v6.0.0 asset) |
+| 7 | macos: cocotb sdist aborted by cocotb's own python_requires check (runner python3 newer than 2.1.0 metadata); with the escape hatch it installed fine | `COCOTB_IGNORE_PYTHON_REQUIRES=1` kept — cocotb's official escape hatch |
+| 8 | windows run 1: choco+assert log with a silent 27 s middle — native tools (`tar`, `choco`, `gh`) don't trigger `$ErrorActionPreference` | `$PSNativeCommandUseErrorActionPreference = $true` + literal paths (`bin\ghdl.exe`, `oss-cad-suite\bin\yosys.exe`) guarded by `Test-Path` throws that print directory contents |
+
+Windows/macOS/Linux layout facts (zip root `bin/ include/ lib/`; tgz root
+`oss-cad-suite/`; ghdl macos tarball nested) were verified by downloading
+the actual release assets, not assumed.
