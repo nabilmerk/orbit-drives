@@ -11,9 +11,16 @@ brew install llvm icarus-verilog verilator yosys
 # download uses the workflow's GH_TOKEN -- anonymous api.github.com calls from
 # shared runner IPs hit the rate limit (second run's verdict).
 # gh release download has no -O flag: it lands files in --dir.
-gh release download --repo ghdl/ghdl --pattern 'ghdl-llvm-*-macos15-aarch64.tar.gz' -D /tmp/ghdl-dl
-sudo tar -xzf /tmp/ghdl-dl/ghdl-llvm-*-macos15-aarch64.tar.gz -C /usr/local --strip-components=1
+# [0-9]* excludes the ghdl-llvm-jit-* asset (fifth run's verdict: the glob
+# matched two archives and tar refused).
+gh release download --repo ghdl/ghdl --pattern 'ghdl-llvm-[0-9]*-macos15-aarch64.tar.gz' -D /tmp/ghdl-dl
+sudo tar -xzf /tmp/ghdl-dl/ghdl-llvm-[0-9]*-macos15-aarch64.tar.gz -C /usr/local --strip-components=1
 rm -rf /tmp/ghdl-dl
+
+# ghdl's llvm backend may resolve brew llvm's dylibs, which are keg-only
+# (off PATH). Export defensively and persist for the cargo test step.
+export DYLD_FALLBACK_LIBRARY_PATH="/opt/homebrew/opt/llvm/lib:${DYLD_FALLBACK_LIBRARY_PATH:-}"
+echo "DYLD_FALLBACK_LIBRARY_PATH=$DYLD_FALLBACK_LIBRARY_PATH" >> "${GITHUB_ENV:?}"
 
 # cocotb pinned to the probed version (--break-system-packages is a no-op
 # when no EXTERNALLY-MANAGED marker exists). COCOTB_IGNORE_PYTHON_REQUIRES

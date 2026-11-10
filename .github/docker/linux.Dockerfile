@@ -7,7 +7,7 @@ FROM ubuntu:24.04
 # from nickg's official .deb below.
 RUN apt-get update \
  && apt-get install -y --no-install-recommends \
-      ca-certificates curl git gcc \
+      ca-certificates curl git gcc libc6-dev \
       python3 python3-pip \
       iverilog verilator yosys \
  && rm -rf /var/lib/apt/lists/*

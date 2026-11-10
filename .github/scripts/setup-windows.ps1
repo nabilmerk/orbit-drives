@@ -31,10 +31,12 @@ if (-not (Test-Path "$env:RUNNER_TEMP\oss-cad-suite\bin\yosys.exe")) {
   throw "yosys.exe missing after extract; tgz root was: $((Get-ChildItem "$env:RUNNER_TEMP" | Where-Object Name -match 'oss' | ForEach-Object Name) -join ', ')"
 }
 Add-Content $env:GITHUB_PATH "$env:RUNNER_TEMP\oss-cad-suite\bin"
+# the suite's DLLs live in lib/, found via PATH (fifth run's verdict)
+Add-Content $env:GITHUB_PATH "$env:RUNNER_TEMP\oss-cad-suite\lib"
 
 # The promised set must answer on THIS step's PATH, or the script fails
 # (the same directories just written to GITHUB_PATH, applied locally).
-$env:PATH = "$env:RUNNER_TEMP\ghdl\bin;$env:RUNNER_TEMP\oss-cad-suite\bin;$env:PATH"
+$env:PATH = "$env:RUNNER_TEMP\ghdl\bin;$env:RUNNER_TEMP\oss-cad-suite\bin;$env:RUNNER_TEMP\oss-cad-suite\lib;$env:PATH"
 ghdl --version | Select-Object -First 1
 iverilog -V 2>&1 | Select-Object -First 1
 yosys -V

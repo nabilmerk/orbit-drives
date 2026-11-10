@@ -117,6 +117,9 @@ so the spec stays the truth, not the first draft.
 | 8 | windows run 1: choco+assert log with a silent 27 s middle — native tools (`tar`, `choco`, `gh`) don't trigger `$ErrorActionPreference` | `$PSNativeCommandUseErrorActionPreference = $true` + literal paths (`bin\ghdl.exe`, `oss-cad-suite\bin\yosys.exe`) guarded by `Test-Path` throws that print directory contents |
 | 9 | run 4: image **builds and pushes** (apt, ghdl tarball, nvc deb, cocotb all green); linux job's asserts all pass, then `linker 'cc' not found` — `--no-install-recommends` ships no C toolchain | `gcc` added to the image apt list |
 | 10 | run 4: `gh release download` rejects `--latest` (Usage error) — the flag doesn't exist; a bare tag argument means latest | `--latest` dropped from both scripts; behavior unchanged |
+| 11 | run 5: linux links fail — `Scrt1.o`/`crti.o`/`-lc` missing (`cc` present but no glibc dev files under `--no-install-recommends`) | `libc6-dev` added to the image apt list |
+| 12 | run 5: windows — ghdl 6.0.0 and iverilog **answered**; `yosys.exe` died `0xC0000135` (DLL not found): OSS CAD Suite keeps DLLs in `oss-cad-suite/lib/` (tarball-verified), found via PATH | suite's `lib\` added to `GITHUB_PATH` and the local PATH override |
+| 13 | run 5: macos — the ghdl glob matched two assets (`ghdl-llvm-6.0.0-…` AND `ghdl-llvm-jit-6.0.0-…`); tar refused multiple archives | pattern tightened to `ghdl-llvm-[0-9]*-…` (jit excluded, any version still matches); defensive `DYLD_FALLBACK_LIBRARY_PATH` for brew's keg-only llvm, persisted via `GITHUB_ENV` |
 
 Windows/macOS/Linux layout facts (zip root `bin/ include/ lib/`; tgz root
 `oss-cad-suite/`; ghdl macos tarball nested) were verified by downloading
