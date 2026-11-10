@@ -1,0 +1,91 @@
+name: tools
+
+on:
+  push:
+    branches: [main]
+    paths:
+      - 'src/**'
+      - 'tests/**'
+      - 'Cargo.toml'
+      - '.github/workflows/tools.yml'
+      - '.github/docker/**'
+      - '.github/scripts/**'
+  pull_request:
+    branches: [main]
+    paths:
+      - 'src/**'
+      - 'tests/**'
+      - 'Cargo.toml'
+      - '.github/workflows/tools.yml'
+      - '.github/docker/**'
+      - '.github/scripts/**'
+  schedule:
+    - cron: '0 6 * * 1' # Mondays 06:00 UTC — the rot detector re-probes every tool
+  workflow_dispatch:
+
+concurrency:
+  group: tools-${{ github.ref }}
+  cancel-in-progress: true
+
+permissions:
+  contents: read
+  packages: write
+
+jobs:
+  image:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: docker/login-action@v3
+        with:
+          registry: ghcr.io
+          username: ${{ github.actor }}
+          password: ${{ secrets.GITHUB_TOKEN }}
+      - uses: docker/build-push-action@v6
+        with:
+          context: .github/docker
+          file: .github/docker/linux.Dockerfile
+          push: ${{ github.event_name != 'pull_request' }}
+          tags: |
+            ghcr.io/nabilmerk/orbit-drives-ci-linux:latest
+            ghcr.io/nabilmerk/orbit-drives-ci-linux:${{ github.sha }}
+          cache-from: type=gha
+          cache-to: type=gha,mode=max
+
+  linux:
+    needs: image
+    runs-on: ubuntu-latest
+    container:
+      image: ghcr.io/nabilmerk/orbit-drives-ci-linux:latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: dtolnay/rust-toolchain@stable
+      - name: Assert the promised set
+        run: |
+          ghdl --version | head -1
+          nvc --version | head -1
+          iverilog -V 2>&1 | head -1
+          verilator --version
+          yosys -V
+          python3 -c "import cocotb; print('cocotb', cocotb.__version__)"
+      - run: cargo test
+
+  windows:
+    runs-on: windows-latest
+    timeout-minutes: 60
+    steps:
+      - uses: actions/checkout@v4
+      - name: Install the promised set
+        shell: pwsh
+        run: ./.github/scripts/setup-windows.ps1
+      - uses: dtolnay/rust-toolchain@stable
+      - run: cargo test
+
+  macos:
+    runs-on: macos-latest
+    timeout-minutes: 45
+    steps:
+      - uses: actions/checkout@v4
+      - run: bash .github/scripts/setup-macos.sh
+      - uses: dtolnay/rust-toolchain@stable
+      - run: cargo test
