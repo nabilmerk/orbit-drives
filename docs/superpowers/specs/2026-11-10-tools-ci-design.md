@@ -122,6 +122,7 @@ so the spec stays the truth, not the first draft.
 | 13 | run 5: macos — the ghdl glob matched two assets (`ghdl-llvm-6.0.0-…` AND `ghdl-llvm-jit-6.0.0-…`); tar refused multiple archives | pattern tightened to `ghdl-llvm-[0-9]*-…` (jit excluded, any version still matches); defensive `DYLD_FALLBACK_LIBRARY_PATH` for brew's keg-only llvm, persisted via `GITHUB_ENV` |
 | 14 | run 6: **all four jobs green** — but the per-binary summaries (`0 passed; 3–5 ignored`) betray it: the recipe tests are `#[ignore]`-gated (`cargo test -- --ignored` per their own attribute text), so plain `cargo test` NEVER executed them | tools jobs run `cargo test -- --include-ignored`; the tests' inner PATH/`QUARTUS_BIN` guards keep absent tools honest |
 | 15 | run 7: with `--include-ignored`, **macOS and Windows pass with the recipes live** (ghdl/nvc-free sets, cocotb on new python, suite yosys). Linux fails only verilator: the drive linted clean and exited honest — the build died `sh: 1: make: not found` (verilator `--build` shells to make; image lacked it) | `make` added to the image apt list |
+| 16 | run 8: with make present, the same two verilator tests progress past the build start and die `make: g++: No such file or directory` — verilated.o needs the C++ compiler; every other linux suite (nvc 4, cocotb 5, ghdl/yosys/iverilog) passes | `g++` added to the image apt list |
 
 Windows/macOS/Linux layout facts (zip root `bin/ include/ lib/`; tgz root
 `oss-cad-suite/`; ghdl macos tarball nested) were verified by downloading
