@@ -1,7 +1,7 @@
 # The orbit-drives Guide
 
-orbit-drives removes the scripting from your [orbit](https://github.com/chaseruskin/orbit)
-targets: orbit plans your dependencies into a blueprint — the drives execute it, tool by
-tool, each carrying its probed failure vocabulary and an honest exit.
+orbit-drives exists so you never write — or think about — the scripts
+around your EDA tools again. No Makefiles, no Tcl, no run glue: describe
+your HDL, and orbit-drives runs it everywhere.
 
 Start with the [Tutorial](tutorial.md), or go straight to the [Quick start](quickstart.md).
