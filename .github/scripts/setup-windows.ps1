@@ -13,7 +13,8 @@ choco install iverilog -y --no-progress
 # gh release download uses the workflow's GH_TOKEN — anonymous api.github.com
 # calls from shared runner IPs hit the rate limit (second run's verdict).
 # gh release download has no -O flag (that's curl): it lands files in --dir.
-gh release download --repo ghdl/ghdl --pattern 'ghdl-mcode-*-ucrt64.zip' --latest -D "$env:RUNNER_TEMP\ghdl-dl"
+# no tag argument on gh release download means: latest release.
+gh release download --repo ghdl/ghdl --pattern 'ghdl-mcode-*-ucrt64.zip' -D "$env:RUNNER_TEMP\ghdl-dl"
 $ghdlZip = (Get-ChildItem "$env:RUNNER_TEMP\ghdl-dl\ghdl-mcode-*-ucrt64.zip" | Select-Object -First 1).FullName
 Expand-Archive $ghdlZip -DestinationPath "$env:RUNNER_TEMP\ghdl" -Force
 if (-not (Test-Path "$env:RUNNER_TEMP\ghdl\bin\ghdl.exe")) {
@@ -23,7 +24,7 @@ Add-Content $env:GITHUB_PATH "$env:RUNNER_TEMP\ghdl\bin"
 
 # yosys — OSS CAD Suite is the official Windows distribution (no choco package).
 # Tgz root layout (verified): oss-cad-suite/ wrapping bin/ etc.
-gh release download --repo YosysHQ/oss-cad-suite-build --pattern 'oss-cad-suite-windows-x64-*.tgz' --latest -D "$env:RUNNER_TEMP\oss-dl"
+gh release download --repo YosysHQ/oss-cad-suite-build --pattern 'oss-cad-suite-windows-x64-*.tgz' -D "$env:RUNNER_TEMP\oss-dl"
 $ossTgz = (Get-ChildItem "$env:RUNNER_TEMP\oss-dl\oss-cad-suite-windows-x64-*.tgz" | Select-Object -First 1).FullName
 tar -xzf $ossTgz -C "$env:RUNNER_TEMP"
 if (-not (Test-Path "$env:RUNNER_TEMP\oss-cad-suite\bin\yosys.exe")) {

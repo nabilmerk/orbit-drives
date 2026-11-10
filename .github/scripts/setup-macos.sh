@@ -11,7 +11,7 @@ brew install llvm icarus-verilog verilator yosys
 # download uses the workflow's GH_TOKEN -- anonymous api.github.com calls from
 # shared runner IPs hit the rate limit (second run's verdict).
 # gh release download has no -O flag: it lands files in --dir.
-gh release download --repo ghdl/ghdl --pattern 'ghdl-llvm-*-macos15-aarch64.tar.gz' --latest -D /tmp/ghdl-dl
+gh release download --repo ghdl/ghdl --pattern 'ghdl-llvm-*-macos15-aarch64.tar.gz' -D /tmp/ghdl-dl
 sudo tar -xzf /tmp/ghdl-dl/ghdl-llvm-*-macos15-aarch64.tar.gz -C /usr/local --strip-components=1
 rm -rf /tmp/ghdl-dl
 

@@ -115,6 +115,8 @@ so the spec stays the truth, not the first draft.
 | 6 | macos: `ghdl: command not found` — the ghdl macOS tarball is NESTED (`ghdl-llvm-*/bin/…`), so `-C /usr/local` buried the binary | extract with `--strip-components=1` (layout verified against the v6.0.0 asset) |
 | 7 | macos: cocotb sdist aborted by cocotb's own python_requires check (runner python3 newer than 2.1.0 metadata); with the escape hatch it installed fine | `COCOTB_IGNORE_PYTHON_REQUIRES=1` kept — cocotb's official escape hatch |
 | 8 | windows run 1: choco+assert log with a silent 27 s middle — native tools (`tar`, `choco`, `gh`) don't trigger `$ErrorActionPreference` | `$PSNativeCommandUseErrorActionPreference = $true` + literal paths (`bin\ghdl.exe`, `oss-cad-suite\bin\yosys.exe`) guarded by `Test-Path` throws that print directory contents |
+| 9 | run 4: image **builds and pushes** (apt, ghdl tarball, nvc deb, cocotb all green); linux job's asserts all pass, then `linker 'cc' not found` — `--no-install-recommends` ships no C toolchain | `gcc` added to the image apt list |
+| 10 | run 4: `gh release download` rejects `--latest` (Usage error) — the flag doesn't exist; a bare tag argument means latest | `--latest` dropped from both scripts; behavior unchanged |
 
 Windows/macOS/Linux layout facts (zip root `bin/ include/ lib/`; tgz root
 `oss-cad-suite/`; ghdl macos tarball nested) were verified by downloading
