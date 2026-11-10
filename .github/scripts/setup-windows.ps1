@@ -2,30 +2,39 @@
 # nvc/verilator/cocotb stay WSL/POSIX-only per the README matrix -- their
 # gated tests self-skip here, honestly.
 $ErrorActionPreference = 'Stop'
+# native tools (choco, tar) must fail the script too, not just set $LASTEXITCODE
+$PSNativeCommandUseErrorActionPreference = $true
 
 # iverilog — the only one of our tools Chocolatey carries (checked 2026-11-10).
 choco install iverilog -y --no-progress
 
 # ghdl — official mcode build for Windows (ucrt64), not on Chocolatey.
-$ghdl = (Invoke-RestMethod 'https://api.github.com/repos/ghdl/ghdl/releases/latest').assets |
+# Zip root layout (verified against the v6.0.0 asset): bin/ include/ lib/.
+$ghdlUrl = (Invoke-RestMethod 'https://api.github.com/repos/ghdl/ghdl/releases/latest').assets |
   Where-Object { $_.name -match '^ghdl-mcode-.*-ucrt64\.zip$' } |
-  Select-Object -First 1
-Invoke-WebRequest $ghdl.browser_download_url -OutFile "$env:RUNNER_TEMP\ghdl.zip"
+  Select-Object -First 1 -ExpandProperty browser_download_url
+Invoke-WebRequest $ghdlUrl -OutFile "$env:RUNNER_TEMP\ghdl.zip"
 Expand-Archive "$env:RUNNER_TEMP\ghdl.zip" -DestinationPath "$env:RUNNER_TEMP\ghdl" -Force
-"$(Get-ChildItem -Directory "$env:RUNNER_TEMP\ghdl" | Select-Object -First 1 -ExpandProperty FullName)\bin" |
-  Add-Content $env:GITHUB_PATH
+if (-not (Test-Path "$env:RUNNER_TEMP\ghdl\bin\ghdl.exe")) {
+  throw "ghdl.exe missing after extract; zip root was: $((Get-ChildItem "$env:RUNNER_TEMP\ghdl" | Select-Object -First 8 | ForEach-Object Name) -join ', ')"
+}
+Add-Content $env:GITHUB_PATH "$env:RUNNER_TEMP\ghdl\bin"
 
 # yosys — OSS CAD Suite is the official Windows distribution (no choco package).
-$oss = (Invoke-RestMethod 'https://api.github.com/repos/YosysHQ/oss-cad-suite-build/releases/latest').assets |
+# Tgz root layout (verified): oss-cad-suite/ wrapping bin/ etc.
+$ossUrl = (Invoke-RestMethod 'https://api.github.com/repos/YosysHQ/oss-cad-suite-build/releases/latest').assets |
   Where-Object { $_.name -match '^oss-cad-suite-windows-x64-.*\.tgz$' } |
-  Select-Object -First 1
-Invoke-WebRequest $oss.browser_download_url -OutFile "$env:RUNNER_TEMP\oss-cad-suite.tgz"
+  Select-Object -First 1 -ExpandProperty browser_download_url
+Invoke-WebRequest $ossUrl -OutFile "$env:RUNNER_TEMP\oss-cad-suite.tgz"
 tar -xzf "$env:RUNNER_TEMP\oss-cad-suite.tgz" -C "$env:RUNNER_TEMP"
-"$env:RUNNER_TEMP\oss-cad-suite\bin" | Add-Content $env:GITHUB_PATH
+if (-not (Test-Path "$env:RUNNER_TEMP\oss-cad-suite\bin\yosys.exe")) {
+  throw "yosys.exe missing after extract; tgz root was: $((Get-ChildItem "$env:RUNNER_TEMP" | Where-Object Name -match 'oss' | ForEach-Object Name) -join ', ')"
+}
+Add-Content $env:GITHUB_PATH "$env:RUNNER_TEMP\oss-cad-suite\bin"
 
 # The promised set must answer on THIS step's PATH, or the script fails
 # (the same directories just written to GITHUB_PATH, applied locally).
-$env:PATH = "$env:RUNNER_TEMP\ghdl\$(Get-ChildItem -Directory "$env:RUNNER_TEMP\ghdl" | Select-Object -First 1 -ExpandProperty Name)\bin;$env:RUNNER_TEMP\oss-cad-suite\bin;$env:PATH"
+$env:PATH = "$env:RUNNER_TEMP\ghdl\bin;$env:RUNNER_TEMP\oss-cad-suite\bin;$env:PATH"
 ghdl --version | Select-Object -First 1
 iverilog -V 2>&1 | Select-Object -First 1
 yosys -V

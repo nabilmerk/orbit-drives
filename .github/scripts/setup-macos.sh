@@ -16,8 +16,10 @@ sudo tar -xzf /tmp/ghdl.tgz -C /usr/local
 rm /tmp/ghdl.tgz
 
 # cocotb pinned to the probed version (--break-system-packages is a no-op
-# when no EXTERNALLY-MANAGED marker exists).
-python3 -m pip install --break-system-packages cocotb==2.1.0
+# when no EXTERNALLY-MANAGED marker exists). COCOTB_IGNORE_PYTHON_REQUIRES
+# is cocotb's own escape hatch: runner python3 is newer than cocotb 2.1.0's
+# metadata, so pip falls back to the sdist, whose check otherwise aborts.
+COCOTB_IGNORE_PYTHON_REQUIRES=1 python3 -m pip install --break-system-packages cocotb==2.1.0
 
 # The promised set must answer, or this script fails the job.
 ghdl --version | head -1

@@ -41,6 +41,9 @@ jobs:
           registry: ghcr.io
           username: ${{ github.actor }}
           password: ${{ secrets.GITHUB_TOKEN }}
+      # the gha cache backend needs the docker-container driver; the default
+      # docker driver rejects cache export (first run's failure)
+      - uses: docker/setup-buildx-action@v3
       - uses: docker/build-push-action@v6
         with:
           context: .github/docker
