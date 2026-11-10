@@ -1,13 +1,13 @@
 FROM ubuntu:24.04
 
 # git: actions/checkout needs it inside containers. curl: toolchain bootstrap.
-# gcc: rust's linker (`cc`) -- --no-install-recommends keeps it out otherwise
-# (fourth run's verdict). iverilog/verilator/yosys are in noble universe.
-# nvc is NOT (noble has no such package -- checked 2026-11-10); it comes
-# from nickg's official .deb below.
+# gcc + libc6-dev: rust's linker. make: verilator --build shells out to it
+# (seventh run's verdict: `make: not found` behind an honest verilator exit).
+# iverilog/verilator/yosys are in noble universe. nvc is NOT (noble has no
+# such package -- checked 2026-11-10); it comes from nickg's official .deb.
 RUN apt-get update \
  && apt-get install -y --no-install-recommends \
-      ca-certificates curl git gcc libc6-dev \
+      ca-certificates curl git gcc libc6-dev make \
       python3 python3-pip \
       iverilog verilator yosys \
  && rm -rf /var/lib/apt/lists/*
