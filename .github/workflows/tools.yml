@@ -80,6 +80,8 @@ jobs:
       - uses: actions/checkout@v4
       - name: Install the promised set
         shell: pwsh
+        env:
+          GH_TOKEN: ${{ github.token }}
         run: ./.github/scripts/setup-windows.ps1
       - uses: dtolnay/rust-toolchain@stable
       - run: cargo test
@@ -90,5 +92,7 @@ jobs:
     steps:
       - uses: actions/checkout@v4
       - run: bash .github/scripts/setup-macos.sh
+        env:
+          GH_TOKEN: ${{ github.token }}
       - uses: dtolnay/rust-toolchain@stable
       - run: cargo test

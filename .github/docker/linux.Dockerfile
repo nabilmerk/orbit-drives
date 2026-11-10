@@ -1,13 +1,23 @@
 FROM ubuntu:24.04
 
 # git: actions/checkout needs it inside containers. curl: toolchain bootstrap.
-# nvc/iverilog/verilator/yosys: all present in noble universe (checked 2026-11-10).
+# iverilog/verilator/yosys are in noble universe. nvc is NOT (noble has no
+# such package -- checked 2026-11-10); it comes from nickg's official .deb.
 RUN apt-get update \
  && apt-get install -y --no-install-recommends \
       ca-certificates curl git \
       python3 python3-pip \
-      nvc iverilog verilator yosys \
+      iverilog verilator yosys \
  && rm -rf /var/lib/apt/lists/*
+
+# nvc — the official ubuntu-24.04 .deb from the nickg/nvc release (apt pulls
+# its declared deps, e.g. llvm, from the normal repos).
+ARG NVC_VERSION=1.23.1
+RUN curl -fsSL -o /tmp/nvc.deb \
+      "https://github.com/nickg/nvc/releases/download/r${NVC_VERSION}/nvc_${NVC_VERSION}-1_amd64_ubuntu-24.04.deb" \
+ && apt-get install -y /tmp/nvc.deb \
+ && rm /tmp/nvc.deb \
+ && nvc --version
 
 # ghdl 6.0.0 — the official ubuntu24.04 build (the version the probed facts pin).
 # Tarball layout is bin/ lib/ include/ at the root; /usr/local merges it onto PATH.

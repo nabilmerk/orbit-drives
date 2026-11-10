@@ -5,14 +5,13 @@ set -euo pipefail
 brew install llvm icarus-verilog verilator yosys
 
 # ghdl is NOT in Homebrew (checked 2026-11-10: no core formula, no tap).
-# Use the official llvm-backend build for Apple silicon; needs brew llvm.
-GHDL_URL=$(curl -fsSL https://api.github.com/repos/ghdl/ghdl/releases/latest \
-  | python3 -c "import json,sys
-assets = json.load(sys.stdin)['assets']
-print(next(a['browser_download_url'] for a in assets
-           if 'llvm' in a['name'] and a['name'].endswith('macos15-aarch64.tar.gz')))")
-curl -fsSL -o /tmp/ghdl.tgz "$GHDL_URL"
-sudo tar -xzf /tmp/ghdl.tgz -C /usr/local
+# Official llvm-backend build for Apple silicon; needs brew llvm. The tarball
+# is NESTED (ghdl-llvm-*/bin ... -- verified against the v6.0.0 asset), so
+# --strip-components=1 drops bin/ghdl straight onto /usr/local/bin. gh release
+# download uses the workflow's GH_TOKEN -- anonymous api.github.com calls from
+# shared runner IPs hit the rate limit (second run's verdict).
+gh release download --repo ghdl/ghdl --pattern 'ghdl-llvm-*-macos15-aarch64.tar.gz' --latest -O /tmp/ghdl.tgz
+sudo tar -xzf /tmp/ghdl.tgz -C /usr/local --strip-components=1
 rm /tmp/ghdl.tgz
 
 # cocotb pinned to the probed version (--break-system-packages is a no-op
