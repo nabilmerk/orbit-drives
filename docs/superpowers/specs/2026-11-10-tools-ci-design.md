@@ -120,6 +120,7 @@ so the spec stays the truth, not the first draft.
 | 11 | run 5: linux links fail — `Scrt1.o`/`crti.o`/`-lc` missing (`cc` present but no glibc dev files under `--no-install-recommends`) | `libc6-dev` added to the image apt list |
 | 12 | run 5: windows — ghdl 6.0.0 and iverilog **answered**; `yosys.exe` died `0xC0000135` (DLL not found): OSS CAD Suite keeps DLLs in `oss-cad-suite/lib/` (tarball-verified), found via PATH | suite's `lib\` added to `GITHUB_PATH` and the local PATH override |
 | 13 | run 5: macos — the ghdl glob matched two assets (`ghdl-llvm-6.0.0-…` AND `ghdl-llvm-jit-6.0.0-…`); tar refused multiple archives | pattern tightened to `ghdl-llvm-[0-9]*-…` (jit excluded, any version still matches); defensive `DYLD_FALLBACK_LIBRARY_PATH` for brew's keg-only llvm, persisted via `GITHUB_ENV` |
+| 14 | run 6: **all four jobs green** — but the per-binary summaries (`0 passed; 3–5 ignored`) betray it: the recipe tests are `#[ignore]`-gated (`cargo test -- --ignored` per their own attribute text), so plain `cargo test` NEVER executed them | tools jobs run `cargo test -- --include-ignored`; the tests' inner PATH/`QUARTUS_BIN` guards keep absent tools honest |
 
 Windows/macOS/Linux layout facts (zip root `bin/ include/ lib/`; tgz root
 `oss-cad-suite/`; ghdl macos tarball nested) were verified by downloading

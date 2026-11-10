@@ -71,7 +71,9 @@ jobs:
           verilator --version
           yosys -V
           python3 -c "import cocotb; print('cocotb', cocotb.__version__)"
-      - run: cargo test
+      # the recipe tests are #[ignore]-gated (they check PATH themselves) --
+      # plain `cargo test` never executes them (sixth run's verdict)
+      - run: cargo test -- --include-ignored
 
   windows:
     runs-on: windows-latest
@@ -84,7 +86,7 @@ jobs:
           GH_TOKEN: ${{ github.token }}
         run: ./.github/scripts/setup-windows.ps1
       - uses: dtolnay/rust-toolchain@stable
-      - run: cargo test
+      - run: cargo test -- --include-ignored
 
   macos:
     runs-on: macos-latest
@@ -95,4 +97,4 @@ jobs:
         env:
           GH_TOKEN: ${{ github.token }}
       - uses: dtolnay/rust-toolchain@stable
-      - run: cargo test
+      - run: cargo test -- --include-ignored
