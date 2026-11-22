@@ -44,7 +44,9 @@ pub enum Tool {
 /// exit-2 face names the tool and the token.
 pub fn vhdl_flag(tool: Tool, token: &str) -> Option<Vec<String>> {
     let pieces: &[&str] = match (tool, token) {
-        (Tool::Ghdl, "93") => &["--std=93"],
+        // "93" is ghdl's default revision: no flag rides (see the test
+        // above for the probed wall the explicit pin creates)
+        (Tool::Ghdl, "93") => &[],
         (Tool::Ghdl, "2008") => &["--std=08"],
         (Tool::Ghdl, "2019") => &["--std=19"],
         (Tool::Nvc, "93") => &["--std=1993"],
@@ -119,10 +121,16 @@ mod tests {
 
     #[test]
     fn vhdl_mappings_carry_the_probed_spellings() {
-        assert_eq!(
-            vhdl_flag(Tool::Ghdl, "93"),
-            Some(vec![String::from("--std=93")])
-        );
+        // ghdl's "93" rides the tool's DEFAULT: the explicit `--std=93`
+        // pin enforces strict-93 local-static rules that the default
+        // analysis does not, and the pin walls GRLIB-class corpora
+        // (probed live 2026-11-22 on ghdl 6.0.0: GRLIB's amba_tp
+        // `2**(gAWidth-2)` bound errors under the explicit pin and
+        // compiles clean at the default -- the 2026-11-08 un-pinning
+        // ruling, now proven for the declared-93 face too). A user who
+        // genuinely wants the strict pin passes it through
+        // `ORBIT_DRIVES_GHDL_FLAGS`.
+        assert_eq!(vhdl_flag(Tool::Ghdl, "93"), Some(Vec::new()));
         assert_eq!(
             vhdl_flag(Tool::Ghdl, "2008"),
             Some(vec![String::from("--std=08")])
