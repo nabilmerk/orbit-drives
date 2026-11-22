@@ -127,6 +127,40 @@ fn run_std_flag() -> Result<String, DriveError> {
     }
 }
 
+/// The std selector for one top's elaborate and run faces: the rows
+/// analyzed into the TOP's library own the std -- a top analyzed under
+/// 2008 must elaborate under 2008 even when the root pins 93. Exactly
+/// one distinct declared std among those rows wins; none falls to the
+/// run-wide chain (`ORBIT_STD`, then the interim env chain); more than
+/// one is ambiguous -- the note fires and the run-wide chain answers
+/// (a tolerant target allowed the mix; the drive names it, never
+/// silently picks).
+fn top_std_flag(top_library: &str, carried: &[Entry]) -> Result<String, DriveError> {
+    let mut declared: Vec<String> = Vec::new();
+    for entry in carried {
+        if entry.library == top_library {
+            if let Some(token) = crate::stdmap::row_std(entry.std.as_deref()) {
+                if !declared.contains(&token) {
+                    declared.push(token);
+                }
+            }
+        }
+    }
+    match declared.len() {
+        1 => std_flag_for(&declared[0]),
+        _ => {
+            if declared.len() > 1 {
+                eprintln!(
+                    "orbit-drives: nvc: note: the top's library carries mixed declared stds \
+                     ({}) -- riding the run-wide std face",
+                    declared.join(", ")
+                );
+            }
+            run_std_flag()
+        }
+    }
+}
+
 /// The env override for nvc's unified heap cap (`ORBIT_DRIVES_NVC_HEAP`):
 /// the value rides every spawn's global block as the `-H <value>` pair,
 /// verbatim -- nvc's own size spellings (`2G`, `512M`; an invalid
@@ -523,7 +557,7 @@ pub fn drive(request: &Drive, mode: Mode) -> Result<(), DriveError> {
         // (`nvc --std=2008 -L . --work=work -e <top>`); after the command
         // the globals are rejected (`** Fatal: unrecognised elaboration
         // option`, probed live).
-        let std_flag = run_std_flag().map_err(|e| {
+        let std_flag = top_std_flag(&top_library, &carried).map_err(|e| {
             eprintln!("orbit-drives: nvc: error: {e}");
             e
         })?;
@@ -554,7 +588,7 @@ pub fn drive(request: &Drive, mode: Mode) -> Result<(), DriveError> {
         match mode {
             Mode::Build => println!("orbit-drives: nvc: {label}: {top}: elaborated"),
             Mode::Sim => {
-                let std_flag = run_std_flag().map_err(|e| {
+                let std_flag = top_std_flag(&top_library, &carried).map_err(|e| {
                     eprintln!("orbit-drives: nvc: error: {e}");
                     e
                 })?;
@@ -1085,6 +1119,34 @@ mod tests {
                 "{name} must be free to analyze into"
             );
         }
+    }
+
+    #[test]
+    fn the_elaborate_std_follows_the_top_owning_library() {
+        use crate::blueprint::parse_blueprint;
+        // the rows analyzed into the top's library declare 93: the
+        // elaborate/run face pins the top's own std, not the root's
+        let carried = parse_blueprint(
+            "VHDL\troot\t./tb.vhd\t93\nVHDL\tdep\t./x.vhd\t2008\n",
+        )
+        .unwrap();
+        assert_eq!(top_std_flag("root", &carried).unwrap(), "--std=1993");
+        // a top in a library with no declared std: the run-wide chain
+        // answers (same expression, so the pin holds whatever the env)
+        assert_eq!(
+            top_std_flag("undeclared", &carried).unwrap(),
+            run_std_flag().unwrap_or_else(|_| std_arg())
+        );
+        // mixed declarations inside one library are ambiguous: the note
+        // fires and the run-wide chain answers
+        let carried = parse_blueprint(
+            "VHDL\troot\t./a.vhd\t93\nVHDL\troot\t./b.vhd\t2008\n",
+        )
+        .unwrap();
+        assert_eq!(
+            top_std_flag("root", &carried).unwrap(),
+            run_std_flag().unwrap_or_else(|_| std_arg())
+        );
     }
 
     #[test]

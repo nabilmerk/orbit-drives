@@ -30,6 +30,7 @@
 //! wipe, the run, and the judge.
 
 use std::fs;
+use std::fmt;
 use std::path::{Path, PathBuf};
 use std::process::Command;
 
@@ -310,6 +311,36 @@ pub enum DriveError {
     Findings(Vec<RunOutcome>),
 }
 
+impl fmt::Display for DriveError {
+    /// Carries the same words the drive prints: every variant is
+    /// rendered on stderr before it is returned, so this Display exists
+    /// so the error type travels with those words (and the print sites
+    /// stay on `{e}`, never the Debug form).
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        match self {
+            DriveError::Blueprint(e) => write!(f, "{e}"),
+            DriveError::NotCarried(e) => write!(f, "{e}"),
+            DriveError::Spawn(message) => write!(f, "{message}"),
+            DriveError::Library(message) => write!(f, "{message}"),
+            DriveError::StdUnsupported { token } => write!(
+                f,
+                "no std selector for \"{token}\": ghdl 6.0 carries 93, 08, and 19 -- \
+                 the row's std (or ORBIT_STD) names a revision ghdl does not"
+            ),
+            DriveError::Analyze(report) => write!(
+                f,
+                "{} file(s) never analyzed after {} pass(es)",
+                report.residual.len(),
+                report.passes
+            ),
+            DriveError::Elaborate { top, .. } => write!(f, "ghdl -e failed for {top}"),
+            DriveError::Findings(findings) => {
+                write!(f, "{} run(s) carried a finding", findings.len())
+            }
+        }
+    }
+}
+
 impl DriveError {
     /// The exit code the variant maps to: 2 for usage-class problems the
     /// drive never got past, 1 for findings ghdl or the judge reported.
@@ -385,7 +416,7 @@ pub fn drive(request: &Drive, mode: Mode) -> Result<(), DriveError> {
         .map(|entry| row_std_flags(entry.std.as_deref()))
         .collect::<Result<Vec<Vec<String>>, DriveError>>()
         .map_err(|e| {
-            eprintln!("orbit-drives: ghdl: error: no std selector for the row's std: {e:?}");
+            eprintln!("orbit-drives: ghdl: error: no std selector for the row's std: {e}");
             e
         })?;
 
@@ -439,8 +470,8 @@ pub fn drive(request: &Drive, mode: Mode) -> Result<(), DriveError> {
         // The top's library rides every command (`--work=<library>`):
         // ghdl's bare-top commands search the work library only, so the
         // pin is load-bearing -- see `top_library`.
-        let std_flags = run_std_flags().map_err(|e| {
-            eprintln!("orbit-drives: ghdl: error: {e:?}");
+        let std_flags = top_std_flags(&top_library, &carried).map_err(|e| {
+            eprintln!("orbit-drives: ghdl: error: {e}");
             e
         })?;
         elaborate
@@ -470,7 +501,7 @@ pub fn drive(request: &Drive, mode: Mode) -> Result<(), DriveError> {
         match mode {
             Mode::Build => println!("orbit-drives: ghdl: {label}: {top}: elaborated"),
             Mode::Sim => {
-                let outcome = run_top(top, &top_library, &request.extra, label)?;
+                let outcome = run_top(top, &top_library, &carried, &request.extra, label)?;
                 if outcome.clean() {
                     println!("orbit-drives: ghdl: {label}: {top}: pass");
                 } else if outcome.has_face() {
@@ -506,14 +537,15 @@ pub fn drive(request: &Drive, mode: Mode) -> Result<(), DriveError> {
 fn run_top(
     top: &str,
     library: &str,
+    carried: &[Entry],
     extra: &[String],
     label: &str,
 ) -> Result<RunOutcome, DriveError> {
     println!("orbit-drives: ghdl: {label}: running {top}");
     // `--assert-level=error` rides AFTER the top unit: it is a
     // simulation option, and ghdl rejects it anywhere earlier.
-    let std_flags = run_std_flags().map_err(|e| {
-        eprintln!("orbit-drives: ghdl: error: {e:?}");
+    let std_flags = top_std_flags(library, carried).map_err(|e| {
+        eprintln!("orbit-drives: ghdl: error: {e}");
         e
     })?;
     let mut run = Command::new(GHDL_BIN);
@@ -598,6 +630,38 @@ fn run_std_flags() -> Result<Vec<String>, DriveError> {
     match crate::stdmap::row_std(None) {
         Some(token) => std_flags_for(&token),
         None => Ok(Vec::new()),
+    }
+}
+
+/// The std pieces for one top's elaborate and run faces: the rows
+/// analyzed into the TOP's library own the std -- a top analyzed under
+/// 08 must elaborate under 08 even when the root pins 93. Exactly one
+/// distinct declared std among those rows wins; none falls to the
+/// run-wide face; more than one is ambiguous -- the note fires and the
+/// run-wide face answers, never a silent pick.
+fn top_std_flags(top_library: &str, carried: &[Entry]) -> Result<Vec<String>, DriveError> {
+    let mut declared: Vec<String> = Vec::new();
+    for entry in carried {
+        if entry.library == top_library {
+            if let Some(token) = crate::stdmap::row_std(entry.std.as_deref()) {
+                if !declared.contains(&token) {
+                    declared.push(token);
+                }
+            }
+        }
+    }
+    match declared.len() {
+        1 => std_flags_for(&declared[0]),
+        _ => {
+            if declared.len() > 1 {
+                eprintln!(
+                    "orbit-drives: ghdl: note: the top's library carries mixed declared stds \
+                     ({}) -- riding the run-wide std face",
+                    declared.join(", ")
+                );
+            }
+            run_std_flags()
+        }
     }
 }
 
@@ -1047,6 +1111,22 @@ tb_err.vhd:9:5:@0ms:(report note): simulation continued
             std_flags_for("87"),
             Err(DriveError::StdUnsupported { .. })
         ));
+    }
+
+    #[test]
+    fn the_std_refusal_carries_the_crafted_words() {
+        let e = DriveError::StdUnsupported {
+            token: String::from("87"),
+        };
+        let face = e.to_string();
+        assert!(
+            face.contains("no std selector for \"87\""),
+            "got: {face}"
+        );
+        assert!(
+            face.contains("ghdl 6.0 carries 93, 08, and 19"),
+            "got: {face}"
+        );
     }
 
     #[test]
