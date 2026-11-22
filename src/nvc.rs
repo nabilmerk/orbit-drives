@@ -92,6 +92,41 @@ fn std_arg() -> String {
     std_flag_from(std::env::var(STD_ENV).ok().as_deref())
 }
 
+/// Resolves one row's std selector: the fork's orbit#24 face. A row
+/// that declares a std (blueprint trailing field, else `ORBIT_STD`)
+/// gets the mapped `--std=` spelling; a row that names a revision nvc
+/// does not carry is the loud [`DriveError::StdUnsupported`]. A row
+/// with nothing declared rides the interim chain
+/// (`ORBIT_DRIVES_NVC_STD`, else the pinned default) unchanged.
+fn row_std_flag(entry_std: Option<&str>) -> Result<String, DriveError> {
+    match crate::stdmap::row_std(entry_std) {
+        Some(token) => {
+            std_flag_for(&token)
+        }
+        None => Ok(std_arg()),
+    }
+}
+
+/// Maps one std token onto nvc's spelling, or refuses loudly.
+fn std_flag_for(token: &str) -> Result<String, DriveError> {
+    match crate::stdmap::vhdl_flag(crate::stdmap::Tool::Nvc, token) {
+        Some(mut argv) => Ok(argv.remove(0)),
+        None => Err(DriveError::StdUnsupported {
+            token: String::from(token),
+        }),
+    }
+}
+
+/// The std selector for the elaborate and run faces: no blueprint row
+/// applies there, so the run-wide face wins (`ORBIT_STD`), then the
+/// interim env chain. An unsupported `ORBIT_STD` token refuses loudly.
+fn run_std_flag() -> Result<String, DriveError> {
+    match crate::stdmap::row_std(None) {
+        Some(token) => std_flag_for(&token),
+        None => Ok(std_arg()),
+    }
+}
+
 /// The env override for nvc's unified heap cap (`ORBIT_DRIVES_NVC_HEAP`):
 /// the value rides every spawn's global block as the `-H <value>` pair,
 /// verbatim -- nvc's own size spellings (`2G`, `512M`; an invalid
@@ -278,6 +313,13 @@ pub enum DriveError {
         /// The std.standard literal that shadows it.
         literal: &'static str,
     },
+    /// A row's declared language standard names a revision nvc does not
+    /// carry: usage-class, exit 2 -- the fork's orbit#24 face hands the
+    /// token over, the mapping answers None, the design is not broken.
+    StdUnsupported {
+        /// The std token the blueprint or `ORBIT_STD` declared.
+        token: String,
+    },
     /// Files never analyzed after the deferral loop exhausted: findings,
     /// exit 1.
     Analyze(AnalyzeReport),
@@ -301,7 +343,8 @@ impl DriveError {
             | DriveError::NotCarried(_)
             | DriveError::Spawn(_)
             | DriveError::Library(_)
-            | DriveError::ReservedLibrary { .. } => 2,
+            | DriveError::ReservedLibrary { .. }
+            | DriveError::StdUnsupported { .. } => 2,
             DriveError::Analyze(_) | DriveError::Elaborate { .. } | DriveError::Findings(_) => 1,
         }
     }
@@ -323,6 +366,11 @@ impl fmt::Display for DriveError {
                  {literal} -- nvc's entity-indication resolution shadows the work library \
                  with the literal (probed nvc 1.23.0), so no secondary unit can analyze \
                  into it. Rename the project's `library` field."
+            ),
+            DriveError::StdUnsupported { token } => write!(
+                f,
+                "no std selector for \"{token}\": nvc carries 1993, 2008, and 2019 -- \
+                 the row's std (or ORBIT_STD) names a revision nvc does not"
             ),
             DriveError::Analyze(report) => write!(
                 f,
@@ -411,6 +459,18 @@ pub fn drive(request: &Drive, mode: Mode) -> Result<(), DriveError> {
         }
     }
 
+    // The std pre-flight: every row's selector resolves before the
+    // deferral loop burns passes on a token nvc cannot carry -- the
+    // fork's orbit#24 face, resolved once per row, loudly when refused.
+    let std_flags: Vec<String> = carried
+        .iter()
+        .map(|entry| row_std_flag(entry.std.as_deref()))
+        .collect::<Result<Vec<String>, DriveError>>()
+        .map_err(|e| {
+            eprintln!("orbit-drives: nvc: error: {e}");
+            e
+        })?;
+
     println!(
         "orbit-drives: nvc: {label}: analyzing {} VHDL file(s) in blueprint order",
         carried.len()
@@ -421,13 +481,13 @@ pub fn drive(request: &Drive, mode: Mode) -> Result<(), DriveError> {
         // declares -- the §25 face, the column consumed verbatim. The
         // deferral loop hands back exactly the paths it was given, and
         // those came from these entries: the lookup cannot miss.
-        let library = carried
+        let index = carried
             .iter()
-            .find(|entry| entry.path == file)
-            .expect("the deferral loop hands back the blueprint's own paths")
-            .library
-            .clone();
-        analyze_once(file, &library)
+            .position(|entry| entry.path == file)
+            .expect("the deferral loop hands back the blueprint's own paths");
+        let library = carried[index].library.clone();
+        let std_flag = std_flags[index].clone();
+        analyze_once(file, &library, &std_flag)
     });
     println!(
         "orbit-drives: nvc: {label}: {} file(s) analyzed in {} pass(es)",
@@ -463,7 +523,14 @@ pub fn drive(request: &Drive, mode: Mode) -> Result<(), DriveError> {
         // (`nvc --std=2008 -L . --work=work -e <top>`); after the command
         // the globals are rejected (`** Fatal: unrecognised elaboration
         // option`, probed live).
-        elaborate.args(global_args(&top_library)).arg("-e").arg(top);
+        let std_flag = run_std_flag().map_err(|e| {
+            eprintln!("orbit-drives: nvc: error: {e}");
+            e
+        })?;
+        elaborate
+            .args(global_args(&top_library, &std_flag))
+            .arg("-e")
+            .arg(top);
         // The extras ride the drive's last step verbatim: the run argv on
         // the sim face, the elaboration argv on the build face (there is
         // no run to carry them, and silently dropping a user argument
@@ -487,7 +554,11 @@ pub fn drive(request: &Drive, mode: Mode) -> Result<(), DriveError> {
         match mode {
             Mode::Build => println!("orbit-drives: nvc: {label}: {top}: elaborated"),
             Mode::Sim => {
-                let outcome = run_top(top, &top_library, &request.extra, label)?;
+                let std_flag = run_std_flag().map_err(|e| {
+                    eprintln!("orbit-drives: nvc: error: {e}");
+                    e
+                })?;
+                let outcome = run_top(top, &top_library, &std_flag, &request.extra, label)?;
                 if outcome.clean() {
                     println!("orbit-drives: nvc: {label}: {top}: pass");
                 } else if outcome.has_face() {
@@ -523,15 +594,17 @@ pub fn drive(request: &Drive, mode: Mode) -> Result<(), DriveError> {
 /// there is no `--assert-level` analogue pinned for nvc because none is
 /// needed -- nvc's run exit probed honest on every failure face, and the
 /// judge gates the log regardless.
+#[allow(clippy::too_many_arguments)]
 fn run_top(
     top: &str,
     library: &str,
+    std_flag: &str,
     extra: &[String],
     label: &str,
 ) -> Result<RunOutcome, DriveError> {
     println!("orbit-drives: nvc: {label}: running {top}");
     let mut run = Command::new(NVC_BIN);
-    run.args(global_args(library))
+    run.args(global_args(library, std_flag))
         .arg("-r")
         .arg(top)
         .args(extra);
@@ -551,9 +624,9 @@ fn run_top(
 /// shape -- and the work library is what makes the attempt multi-library:
 /// each file lands in the directory of the library its blueprint row
 /// declares.
-fn analyze_once(file: &Path, library: &str) -> Result<(), String> {
+fn analyze_once(file: &Path, library: &str, std_flag: &str) -> Result<(), String> {
     let mut command = Command::new(NVC_BIN);
-    command.args(global_args(library)).arg("-a").arg(file);
+    command.args(global_args(library, std_flag)).arg("-a").arg(file);
     match capture(NVC_BIN, &mut command) {
         Ok(output) if output.status.success() => Ok(()),
         Ok(output) => Err(lossy(&output.stderr)),
@@ -573,8 +646,8 @@ fn analyze_once(file: &Path, library: &str) -> Result<(), String> {
 /// project's declared name, orbit's planner is its source of truth); on
 /// the elaborate and run faces it is the top's library, resolved by
 /// [`top_library`].
-fn global_args(library: &str) -> Vec<String> {
-    let mut args = vec![std_arg()];
+fn global_args(library: &str, std_flag: &str) -> Vec<String> {
+    let mut args = vec![String::from(std_flag)];
     args.extend(SEARCH_PATH_ARGS.iter().map(|arg| arg.to_string()));
     args.push(format!("--work={library}"));
     args.extend(heap_args());
@@ -816,7 +889,7 @@ mod tests {
         // path, the work library pin -- all GLOBAL options, always
         // leading, never following a command (after it nvc answers
         // `** Fatal: unrecognised analysis option`).
-        let args = global_args("grlib");
+        let args = global_args("grlib", "--std=2008");
         assert!(
             args[0].starts_with("--std="),
             "every argv leads with the std pin: {:?}",
@@ -825,8 +898,25 @@ mod tests {
         assert_eq!(&args[1..], &["-L", ".", "--work=grlib"]);
         // The library name rides verbatim -- orbit's planner owns it (the
         // §25 ruling); the drive never normalizes it to nvc's default.
-        assert_eq!(global_args("work")[3], "--work=work");
-        assert_eq!(global_args("MyLib")[3], "--work=MyLib");
+        assert_eq!(global_args("work", "--std=2008")[3], "--work=work");
+        assert_eq!(global_args("MyLib", "--std=2008")[3], "--work=MyLib");
+    }
+
+    #[test]
+    fn the_row_std_face_maps_and_refuses_loudly() {
+        // the fork's orbit#24 face: a row token maps to nvc's spelling
+        assert_eq!(row_std_flag(Some("93")).unwrap(), "--std=1993");
+        assert_eq!(row_std_flag(Some("2019")).unwrap(), "--std=2019");
+        // a revision nvc does not carry refuses at the pre-flight
+        assert!(matches!(
+            row_std_flag(Some("87")),
+            Err(DriveError::StdUnsupported { .. })
+        ));
+        // an unsupported run-wide token refuses too
+        assert!(matches!(
+            std_flag_for("banana"),
+            Err(DriveError::StdUnsupported { .. })
+        ));
     }
 
     #[test]

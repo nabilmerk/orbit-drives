@@ -33,7 +33,7 @@ use std::fs;
 use std::process::Command;
 
 use crate::blueprint::{
-    parse_blueprint, plan_note, verilog_only, BlueprintError, Drive, Entry, Mode,
+    parse_blueprint, plan_note, BlueprintError, Drive, Entry, Mode,
 };
 use crate::contracts::{self, Tool};
 use crate::proc::{capture, eprint_block, join_log, lossy, print_block};
@@ -56,6 +56,42 @@ pub const VVP_BIN: &str = "vvp";
 /// drive pins `-g2012` so the judged faces cannot drift with the
 /// default.
 pub const GEN: &str = "-g2012";
+
+/// Resolves the ONE `-g` generation the single compile carries: the
+/// fork's orbit#24 face. Every row's std resolves (row token, else
+/// `ORBIT_STD`); all resolved rows must agree -- iverilog compiles one
+/// analysis set under one selector -- and any token iverilog does not
+/// carry refuses loudly. Nothing declared: the pinned `-g2012` default.
+fn resolved_gen(carried: &[Entry]) -> Result<Vec<String>, DriveError> {
+    let mut gen: Option<Vec<String>> = None;
+    for entry in carried {
+        if let Some(token) = crate::stdmap::row_std(entry.std.as_deref()) {
+            let is_sv = matches!(
+                entry.path.extension().and_then(|ext| ext.to_str()),
+                Some("sv")
+            );
+            let flag = crate::stdmap::verilog_flag(crate::stdmap::Tool::Iverilog, &token, is_sv)
+                .ok_or(DriveError::StdUnsupported {
+                    token: token.clone(),
+                })?;
+            match &gen {
+                None => gen = Some(flag),
+                Some(prev) if prev == &flag => {}
+                Some(prev) => {
+                    // compare the RESOLVED selectors, not the tokens: the
+                    // same token can spell two selectors across languages
+                    // (-g2005 vs -g2005-sv), and which row came first must
+                    // not pick the compile's language mode
+                    return Err(DriveError::MixedStd {
+                        first: prev.join(" "),
+                        second: flag.join(" "),
+                    });
+                }
+            }
+        }
+    }
+    Ok(gen.unwrap_or_else(|| vec![GEN.to_string()]))
+}
 
 /// The snapshot file iverilog writes (`-o`) and vvp runs. It is iverilog's
 /// clock, rewritten by every compile into the working directory.
@@ -152,6 +188,22 @@ pub enum DriveError {
     Spawn(String),
     /// The stale snapshot could not be wiped: usage-class, exit 2.
     Library(String),
+    /// A row's declared language standard names a revision iverilog does
+    /// not carry: usage-class, exit 2 -- the fork's orbit#24 face hands
+    /// the token over, the mapping answers None, the design is not
+    /// broken.
+    StdUnsupported {
+        /// The std token the blueprint or `ORBIT_STD` declared.
+        token: String,
+    },
+    /// The graph declares differing stds, and iverilog compiles ONE
+    /// analysis set under ONE `-g` selector: usage-class, exit 2.
+    MixedStd {
+        /// The first differing std token seen.
+        first: String,
+        /// The std token that differed.
+        second: String,
+    },
     /// The compile failed: findings, exit 1 (iverilog's own exits are
     /// honest there: 2 on a parse error, 1 on an unknown `-s` root,
     /// probed live).
@@ -172,7 +224,9 @@ impl DriveError {
             DriveError::Blueprint(_)
             | DriveError::NotCarried(_)
             | DriveError::Spawn(_)
-            | DriveError::Library(_) => 2,
+            | DriveError::Library(_)
+            | DriveError::StdUnsupported { .. }
+            | DriveError::MixedStd { .. } => 2,
             DriveError::Compile { .. } | DriveError::Findings(_) => 1,
         }
     }
@@ -188,6 +242,18 @@ impl fmt::Display for DriveError {
             DriveError::NotCarried(e) => write!(f, "{e}"),
             DriveError::Spawn(message) => write!(f, "{message}"),
             DriveError::Library(message) => write!(f, "{message}"),
+            DriveError::StdUnsupported { token } => write!(
+                f,
+                "no std selector for \"{token}\": iverilog carries 1995, 2001, 2005, \
+                 2005-sv, and 2012 -- the row's std (or ORBIT_STD) names a revision \
+                 iverilog does not"
+            ),
+            DriveError::MixedStd { first, second } => write!(
+                f,
+                "the graph's rows resolve to differing std selectors ({first} vs \
+                 {second}) -- iverilog compiles one analysis set under one -g \
+                 selector; align the projects' std fields"
+            ),
             DriveError::Compile { .. } => write!(f, "the iverilog compile failed"),
             DriveError::Findings(findings) => {
                 write!(f, "{} run(s) carried a finding", findings.len())
@@ -260,9 +326,15 @@ pub fn drive(request: &Drive, mode: Mode) -> Result<(), DriveError> {
         eprintln!("orbit-drives: iverilog: error: {e}");
         DriveError::Blueprint(e)
     })?;
-    let files = verilog_only(&entries).map_err(|e| {
+    let carried = crate::blueprint::verilog_entries(&entries).map_err(|e| {
         eprintln!("orbit-drives: iverilog: error: {e}");
         DriveError::NotCarried(e)
+    })?;
+    let files: Vec<std::path::PathBuf> =
+        carried.iter().map(|entry| entry.path.clone()).collect();
+    let gen = resolved_gen(&carried).map_err(|e| {
+        eprintln!("orbit-drives: iverilog: error: {e}");
+        e
     })?;
 
     println!(
@@ -280,7 +352,7 @@ pub fn drive(request: &Drive, mode: Mode) -> Result<(), DriveError> {
     } else {
         None
     };
-    compile_once(&files, &request.tops, build_extra).map_err(|stderr| {
+    compile_once(&files, &request.tops, &gen, build_extra).map_err(|stderr| {
         eprint_block(&stderr);
         eprintln!("orbit-drives: iverilog: error: the iverilog compile failed");
         DriveError::Compile { stderr }
@@ -324,10 +396,12 @@ pub fn drive(request: &Drive, mode: Mode) -> Result<(), DriveError> {
 fn compile_once(
     files: &[std::path::PathBuf],
     tops: &[String],
+    gen: &[String],
     extra: Option<&[String]>,
 ) -> Result<(), String> {
     let mut compile = Command::new(IVERILOG_BIN);
-    compile.arg(GEN);
+    compile.args(gen);
+    let _ = GEN;
     for top in tops {
         compile.arg("-s").arg(top);
     }
@@ -515,6 +589,64 @@ tb_warn.v:6: $finish called at 1 (1s)
             "the note should name the plan: {note}"
         );
         assert!(note.starts_with("orbit-drives: iverilog: note:"));
+    }
+
+    #[test]
+    fn the_std_face_resolves_one_generation_or_refuses() {
+        use crate::blueprint::parse_blueprint;
+        // nothing declared: the pinned default rides
+        let carried =
+            crate::blueprint::verilog_entries(&parse_blueprint("VLOG\twork\t./a.v\n").unwrap())
+                .unwrap();
+        assert_eq!(resolved_gen(&carried).unwrap(), vec![GEN.to_string()]);
+        // one declared token maps
+        let carried = crate::blueprint::verilog_entries(
+            &parse_blueprint("VLOG\twork\t./a.v\t2001\n").unwrap(),
+        )
+        .unwrap();
+        assert_eq!(
+            resolved_gen(&carried).unwrap(),
+            vec![String::from("-g2001")]
+        );
+        // differing tokens refuse: one analysis set, one selector
+        let carried = crate::blueprint::verilog_entries(
+            &parse_blueprint("VLOG\twork\t./a.v\t2001\nVLOG\twork\t./b.v\t2012\n")
+                .unwrap(),
+        )
+        .unwrap();
+        assert!(matches!(
+            resolved_gen(&carried),
+            Err(DriveError::MixedStd { .. })
+        ));
+        // a token iverilog does not carry refuses
+        let carried = crate::blueprint::verilog_entries(
+            &parse_blueprint("SYSV\twork\t./a.sv\t2017\n").unwrap(),
+        )
+        .unwrap();
+        assert!(matches!(
+            resolved_gen(&carried),
+            Err(DriveError::StdUnsupported { .. })
+        ));
+        // the same token in both languages resolves to DIFFERENT
+        // selectors (-g2005 vs -g2005-sv): order-independent refusal
+        let carried = crate::blueprint::verilog_entries(
+            &parse_blueprint("VLOG\twork\t./a.v\t2005\nSYSV\twork\t./b.sv\t2005\n")
+                .unwrap(),
+        )
+        .unwrap();
+        assert!(matches!(
+            resolved_gen(&carried),
+            Err(DriveError::MixedStd { .. })
+        ));
+        let carried = crate::blueprint::verilog_entries(
+            &parse_blueprint("SYSV\twork\t./b.sv\t2005\nVLOG\twork\t./a.v\t2005\n")
+                .unwrap(),
+        )
+        .unwrap();
+        assert!(matches!(
+            resolved_gen(&carried),
+            Err(DriveError::MixedStd { .. })
+        ));
     }
 
     #[test]

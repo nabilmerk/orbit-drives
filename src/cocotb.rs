@@ -172,6 +172,21 @@ pub enum DriveError {
     /// The stale build directory or driver script could not be reset:
     /// usage-class, exit 2.
     Library(String),
+    /// A row's declared language standard names a revision the ghdl
+    /// runner does not carry: usage-class, exit 2 -- the fork's
+    /// orbit#24 face hands the token over, the mapping answers None.
+    StdUnsupported {
+        /// The std token the blueprint or `ORBIT_STD` declared.
+        token: String,
+    },
+    /// The graph declares differing stds, and the runner compiles ONE
+    /// build call: usage-class, exit 2.
+    MixedStd {
+        /// The first differing std token seen.
+        first: String,
+        /// The std token that differed.
+        second: String,
+    },
     /// No test module was named: usage-class, exit 2 (the CLI gate
     /// fires first; the drive carries the same door for direct drives).
     TestModule,
@@ -188,6 +203,8 @@ impl DriveError {
             DriveError::Blueprint(_)
             | DriveError::NotCarried(_)
             | DriveError::Spawn(_)
+            | DriveError::StdUnsupported { .. }
+            | DriveError::MixedStd { .. }
             | DriveError::Library(_)
             | DriveError::TestModule => 2,
             DriveError::Findings(_) => 1,
@@ -205,6 +222,18 @@ impl fmt::Display for DriveError {
             DriveError::NotCarried(e) => write!(f, "{e}"),
             DriveError::Spawn(message) => write!(f, "{message}"),
             DriveError::Library(message) => write!(f, "{message}"),
+            DriveError::StdUnsupported { token } => write!(
+                f,
+                "no std selector for \"{token}\": the ghdl runner carries ghdl's \
+                 93, 08, and 19 spellings -- the row's std (or ORBIT_STD) names \
+                 a revision the backing simulator does not"
+            ),
+            DriveError::MixedStd { first, second } => write!(
+                f,
+                "the graph declares differing stds ({first}, {second}) -- the \
+                 cocotb runner compiles one build call; align the projects' \
+                 std fields"
+            ),
             DriveError::TestModule => write!(f, "no test module to drive"),
             DriveError::Findings(findings) => {
                 write!(f, "{} run(s) carried a finding", findings.len())
@@ -268,7 +297,48 @@ pub fn module_name_and_dir(test_module: &str) -> (String, PathBuf) {
 /// exit witness, probed into existence by the runner's own dishonesty
 /// about failed tests (`ghdl -r` exits 0 on a failed test; the finding
 /// lands only in results.xml).
-pub fn runner_script(top: &str, module_stem: &str, files: &[PathBuf], extra: &[String]) -> String {
+/// Resolves the ONE std the single runner build call carries: the
+/// fork's orbit#24 face. Every row's std resolves (row token, else
+/// `ORBIT_STD`); all resolved rows must agree -- the runner compiles
+/// one build call -- and any token the ghdl runner does not carry
+/// refuses loudly. Nothing declared: no build_args ride (cocotb's
+/// backing simulator default). Signature-probed on cocotb 2.1.0's
+/// ghdl runner (2026-11-22): `runner.build(build_args=[...])`.
+fn resolved_build_args(entries: &[crate::blueprint::Entry]) -> Result<Vec<String>, DriveError> {
+    let mut seen: Option<String> = None;
+    for entry in entries {
+        if let Some(token) = crate::stdmap::row_std(entry.std.as_deref()) {
+            match &seen {
+                None => seen = Some(token),
+                Some(prev) if prev == &token => {}
+                Some(prev) => {
+                    return Err(DriveError::MixedStd {
+                        first: prev.clone(),
+                        second: token,
+                    })
+                }
+            }
+        }
+    }
+    match &seen {
+        Some(token) => {
+            crate::stdmap::vhdl_flag(crate::stdmap::Tool::Cocotb, token).ok_or(
+                DriveError::StdUnsupported {
+                    token: token.clone(),
+                },
+            )
+        }
+        None => Ok(Vec::new()),
+    }
+}
+
+pub fn runner_script(
+    top: &str,
+    module_stem: &str,
+    files: &[PathBuf],
+    build_args: &[String],
+    extra: &[String],
+) -> String {
     let mut script = String::new();
     script.push_str("import sys\n");
     script.push_str("from pathlib import Path\n");
@@ -293,6 +363,14 @@ pub fn runner_script(top: &str, module_stem: &str, files: &[PathBuf], extra: &[S
     script.push_str(&py_string(SIM_BUILD_DIR));
     script.push_str(",\n");
     script.push_str("    always=True,\n");
+    script.push_str("    build_args=[");
+    for (index, arg) in build_args.iter().enumerate() {
+        if index > 0 {
+            script.push_str(", ");
+        }
+        script.push_str(&py_string(arg));
+    }
+    script.push_str("],\n");
     script.push_str(")\n");
     script.push_str("results = runner.test(\n");
     script.push_str("    test_module=");
@@ -415,6 +493,11 @@ pub fn drive(request: &Drive) -> Result<(), DriveError> {
         return Err(DriveError::NotCarried(e));
     }
     let files: Vec<PathBuf> = entries.iter().map(|entry| entry.path.clone()).collect();
+    let build_args = resolved_build_args(&entries)
+        .map_err(|e| {
+            eprintln!("orbit-drives: cocotb: error: {e}");
+            e
+        })?;
 
     println!(
         "orbit-drives: cocotb: test: carrying {} VHDL file(s) into the cocotb runner (the \
@@ -426,7 +509,7 @@ pub fn drive(request: &Drive) -> Result<(), DriveError> {
     let mut findings = Vec::new();
     for top in &request.tops {
         println!("orbit-drives: cocotb: test: driving {top} through the cocotb runner");
-        let script = runner_script(top, &module_stem, &files, &request.extra);
+        let script = runner_script(top, &module_stem, &files, &build_args, &request.extra);
         let script_path = format!("{DRIVER_PREFIX}-{top}.py");
         fs::write(&script_path, &script).map_err(|e| {
             let message = format!("cannot write the runner script {script_path}: {e}");
@@ -675,6 +758,7 @@ ERROR: Simulation terminated abnormally. Results file /tmp/x/sim_build/results.x
             "counter",
             "test_counter",
             &[PathBuf::from("./counter.vhd"), PathBuf::from("./top.vhd")],
+            &["--std=08".to_string()],
             &["--vcd=w.vcd".to_string()],
         );
         assert!(script.contains("from cocotb_tools.runner import get_runner\n"));
@@ -683,6 +767,7 @@ ERROR: Simulation terminated abnormally. Results file /tmp/x/sim_build/results.x
         assert!(script.contains("    hdl_toplevel=\"counter\",\n"));
         assert!(script.contains("    build_dir=\"sim_build\",\n"));
         assert!(script.contains("    always=True,\n"));
+        assert!(script.contains("    build_args=[\"--std=08\"],\n"));
         assert!(script.contains("    test_module=\"test_counter\",\n"));
         assert!(script.contains("    test_args=[\"--vcd=w.vcd\"],\n"));
         assert!(script.contains("    (num_tests, num_failed) = get_results(Path(results))\n"));
@@ -698,6 +783,7 @@ ERROR: Simulation terminated abnormally. Results file /tmp/x/sim_build/results.x
             "top",
             "tb",
             &[PathBuf::from("./my design/gate\"1.vhd")],
+            &[],
             &[],
         );
         assert!(script.contains("    sources=[\"./my design/gate\\\"1.vhd\"],\n"));
@@ -768,6 +854,35 @@ ERROR: Simulation terminated abnormally. Results file /tmp/x/sim_build/results.x
         assert!(e
             .to_string()
             .starts_with("the cocotb drive carries the VHDL fileset"));
+    }
+
+    #[test]
+    fn the_std_face_resolves_one_build_call_or_refuses() {
+        use crate::blueprint::parse_blueprint;
+        // nothing declared: no build_args ride
+        let entries = parse_blueprint("VHDL\twork\t./a.vhd\n").unwrap();
+        assert_eq!(resolved_build_args(&entries).unwrap(), Vec::<String>::new());
+        // one declared token maps through ghdl's spellings
+        let entries = parse_blueprint("VHDL\twork\t./a.vhd\t2008\n").unwrap();
+        assert_eq!(
+            resolved_build_args(&entries).unwrap(),
+            vec![String::from("--std=08")]
+        );
+        // differing tokens refuse: one runner build call
+        let entries = parse_blueprint(
+            "VHDL\twork\t./a.vhd\t93\nVHDL\twork\t./b.vhd\t2008\n",
+        )
+        .unwrap();
+        assert!(matches!(
+            resolved_build_args(&entries),
+            Err(DriveError::MixedStd { .. })
+        ));
+        // vhdl-87 has no ghdl-6 spelling: the loud refusal
+        let entries = parse_blueprint("VHDL\twork\t./a.vhd\t87\n").unwrap();
+        assert!(matches!(
+            resolved_build_args(&entries),
+            Err(DriveError::StdUnsupported { .. })
+        ));
     }
 
     #[test]
