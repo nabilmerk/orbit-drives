@@ -382,3 +382,96 @@ end architecture;
 
     fs::remove_dir_all(&out).ok();
 }
+
+#[test]
+#[ignore = "needs ghdl on PATH; run with `cargo test -- --ignored`"]
+fn the_real_ghdl_drive_judges_through_the_pass_marker_witness() {
+    // The pass-marker face (the fork's third witness): a corpus whose
+    // systest halts by a DESIGNED severity failure declares its success
+    // phrase -- the GRLIB zedboard shape, probed live (xsim's "Test
+    // passed, halting with IU error mode" followed by the deliberate
+    // assertion violation). When the phrase rides the run log the run
+    // is clean; when it is absent the standard two-witness rule stands.
+    if !ghdl_present() {
+        eprintln!("skipping: ghdl is not on PATH");
+        return;
+    }
+
+    let out = std::env::temp_dir().join(format!(
+        "orbit-drives-ghdl-passmarker-{}",
+        std::process::id()
+    ));
+    fs::create_dir_all(&out).unwrap();
+    write(
+        &out.join("pkg.vhd"),
+        "\npackage pkg is\n  constant WIDTH : integer := 9;\nend package;\n",
+    );
+    write(
+        &out.join("tb.vhd"),
+        "\nlibrary counter;\nuse counter.pkg.all;\nentity tb is\nend entity;\narchitecture sim of tb is\nbegin\n  process begin\n    report \"TEST PASSED\";\n    assert WIDTH = 8 report \"width drifted\" severity failure;\n    wait;\n  end process;\nend architecture;\n",
+    );
+    write(
+        &out.join("blueprint.tsv"),
+        "VHDL\tcounter\t./tb.vhd\nVHDL\tcounter\t./pkg.vhd\n",
+    );
+
+    // The control: no marker declared -- the designed halt convicts.
+    let control = spawn_shape(
+        Command::new(env!("CARGO_BIN_EXE_orbit-drives")).arg("ghdl"),
+        &out,
+        "tb",
+        Some("counter"),
+    )
+    .output()
+    .unwrap();
+    assert!(
+        !control.status.success(),
+        "the designed halt should convict without a declared marker:\n{}{}",
+        String::from_utf8_lossy(&control.stdout),
+        String::from_utf8_lossy(&control.stderr)
+    );
+
+    // The declared phrase rode the log before the halt: the marker is
+    // the load-bearing witness and the run is clean.
+    let marked = spawn_shape(
+        Command::new(env!("CARGO_BIN_EXE_orbit-drives"))
+            .arg("ghdl")
+            .env("ORBIT_DRIVES_PASS_MARKER", "TEST PASSED"),
+        &out,
+        "tb",
+        Some("counter"),
+    )
+    .output()
+    .unwrap();
+    assert!(
+        marked.status.success(),
+        "the declared marker should override the designed halt:\n{}{}",
+        String::from_utf8_lossy(&marked.stdout),
+        String::from_utf8_lossy(&marked.stderr)
+    );
+    let stdout = String::from_utf8_lossy(&marked.stdout);
+    assert!(
+        stdout.contains("tb: pass"),
+        "the marked run should judge clean:\n{stdout}"
+    );
+
+    // A phrase that never appears leaves the standard rule standing.
+    let absent = spawn_shape(
+        Command::new(env!("CARGO_BIN_EXE_orbit-drives"))
+            .arg("ghdl")
+            .env("ORBIT_DRIVES_PASS_MARKER", "SIM PASSED"),
+        &out,
+        "tb",
+        Some("counter"),
+    )
+    .output()
+    .unwrap();
+    assert!(
+        !absent.status.success(),
+        "a declared-but-absent marker must not green-light the halt:\n{}{}",
+        String::from_utf8_lossy(&absent.stdout),
+        String::from_utf8_lossy(&absent.stderr)
+    );
+
+    fs::remove_dir_all(&out).ok();
+}

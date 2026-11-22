@@ -476,3 +476,43 @@ fn face_present(tool: &Tool, face: &str, log: &str) -> bool {
         log.contains(face)
     }
 }
+
+
+/// The pass-marker face (`ORBIT_DRIVES_PASS_MARKER`): a corpus whose
+/// systest halts by a DESIGNED severity failure declares its success
+/// phrase, and the phrase becomes the judge's third witness. Unset or
+/// blank: no marker is declared.
+pub const PASS_MARKER_ENV: &str = "ORBIT_DRIVES_PASS_MARKER";
+
+/// The pure resolver behind [`pass_marker`], injectable so the tests
+/// pin the semantics without touching the process env.
+pub fn pass_marker_value(value: Option<&str>) -> Option<String> {
+    value
+        .map(str::trim)
+        .filter(|marker| !marker.is_empty())
+        .map(String::from)
+}
+
+/// Reads the declared pass marker from the process env.
+pub fn pass_marker() -> Option<String> {
+    pass_marker_value(std::env::var(PASS_MARKER_ENV).ok().as_deref())
+}
+
+/// The judged-run verdict under the pass-marker witness. When a marker
+/// is declared, its presence in the run log is the load-bearing
+/// witness: the designed halt exits nonzero carrying a failure face ON
+/// SUCCESS, so the standard two-witness rule would convict every
+/// successful run of such a corpus. When the marker is undeclared, or
+/// declared but absent from the log (an early failure before the
+/// success phrase), `standard` -- the exit-and-faces verdict -- stands.
+pub fn clean_with_marker_value(log: &str, marker: Option<&str>, standard: bool) -> bool {
+    match marker {
+        Some(marker) => log.contains(marker),
+        None => standard,
+    }
+}
+
+/// [`clean_with_marker_value`] reading the declared marker from the env.
+pub fn clean_with_marker(log: &str, standard: bool) -> bool {
+    clean_with_marker_value(log, pass_marker().as_deref(), standard)
+}

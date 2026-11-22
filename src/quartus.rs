@@ -244,7 +244,10 @@ impl RunOutcome {
     /// first quartus box probes both, this gate is as double-keyed as
     /// the crate can make it.
     pub fn clean(&self) -> bool {
-        !self.has_face() && self.exit == 0
+        // the pass-marker witness rides every sim face's judgment: a
+        // corpus with a designed halt declares its success phrase and
+        // the phrase decides (see contracts::PASS_MARKER_ENV)
+        crate::contracts::clean_with_marker(&self.log, !self.has_face() && self.exit == 0)
     }
 }
 
@@ -591,9 +594,13 @@ fn drive_sim(
     // is vcom's alone, and a silent skip would leave Verilog files the
     // user believes were simulated. Every non-VHDL entry is the loud
     // not-carried face, in blueprint order.
+    // VHDL-ness rides the row's EXTENSION (the probed fileset
+    // semantics): the shipped targets' ALLHDL rows replace the
+    // built-ins, so the raw fileset string would refuse the design's
+    // own .vhd rows (the twin face of cocotb's, fixed same day).
     let foreign: Vec<crate::blueprint::Entry> = entries
         .iter()
-        .filter(|entry| entry.fileset != "VHDL")
+        .filter(|entry| !crate::blueprint::is_vhdl_row(entry))
         .cloned()
         .collect();
     if !foreign.is_empty() {

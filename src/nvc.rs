@@ -350,7 +350,10 @@ impl RunOutcome {
     /// without writing any probed face, and a clean log must not
     /// green-light it.
     pub fn clean(&self) -> bool {
-        !self.has_face() && self.exit == 0
+        // the pass-marker witness rides every sim face's judgment: a
+        // corpus with a designed halt declares its success phrase and
+        // the phrase decides (see contracts::PASS_MARKER_ENV)
+        crate::contracts::clean_with_marker(&self.log, !self.has_face() && self.exit == 0)
     }
 }
 

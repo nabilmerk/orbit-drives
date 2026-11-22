@@ -272,7 +272,10 @@ impl RunOutcome {
     /// `--assert-level=error` onto the run argv, so a severity-error stop
     /// lands with a nonzero exit too -- the two witnesses agree there.
     pub fn clean(&self) -> bool {
-        !self.has_face() && self.exit == 0
+        // the pass-marker witness rides every sim face's judgment: a
+        // corpus with a designed halt declares its success phrase and
+        // the phrase decides (see contracts::PASS_MARKER_ENV)
+        crate::contracts::clean_with_marker(&self.log, !self.has_face() && self.exit == 0)
     }
 }
 

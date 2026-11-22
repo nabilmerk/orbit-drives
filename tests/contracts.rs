@@ -1087,3 +1087,38 @@ fn coco_vocabulary_is_the_two_probed_faces() {
     );
     assert!(!Tool::Cocotb.line_anchored());
 }
+
+#[test]
+fn the_pass_marker_is_the_third_witness_when_declared() {
+    // a corpus whose systest halts by a DESIGNED severity failure
+    // declares its success phrase: when the phrase rides the run log the
+    // run is clean -- the marker is the load-bearing witness, overriding
+    // the exit and the failure faces (the GRLIB zedboard systest's
+    // designed halt exits nonzero carrying a failure face ON SUCCESS,
+    // probed live: xsim's "Test passed, halting with IU error mode"
+    // followed by the deliberate assertion violation, 2026-11-22)
+    let failing_log = "width drifted\n** Failure: in process tb";
+    assert_eq!(
+        contracts::clean_with_marker_value(failing_log, Some("width drifted"), false),
+        true,
+        "the declared marker overrides both witnesses"
+    );
+    // declared but absent: the standard rule stands (an early failure
+    // before the success phrase must still convict)
+    assert_eq!(
+        contracts::clean_with_marker_value(failing_log, Some("SIM PASSED"), false),
+        false
+    );
+    // undeclared: the standard rule, whatever it judged
+    assert_eq!(contracts::clean_with_marker_value(failing_log, None, false), false);
+    assert_eq!(contracts::clean_with_marker_value("clean log", None, true), true);
+    // blank declarations count as undeclared
+    assert_eq!(
+        contracts::clean_with_marker_value(
+            failing_log,
+            contracts::pass_marker_value(Some("  ")).as_deref(),
+            false
+        ),
+        false
+    );
+}

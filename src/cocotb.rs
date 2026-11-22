@@ -481,10 +481,14 @@ pub fn drive(request: &Drive) -> Result<(), DriveError> {
     })?;
     // The fileset door: the ghdl backend compiles VHDL only (the runner
     // refuses everything else, probed), so every non-VHDL entry is the
-    // loud not-carried face, in blueprint order.
+    // loud not-carried face, in blueprint order. VHDL-ness rides the
+    // row's EXTENSION (the probed fileset semantics: the shipped
+    // targets' ALLHDL rows replace the built-ins, so the raw fileset
+    // string would refuse the design's own .vhd rows -- probed live on
+    // cocotb 2.1.0, 2026-11-22).
     let foreign: Vec<crate::blueprint::Entry> = entries
         .iter()
-        .filter(|entry| entry.fileset != "VHDL")
+        .filter(|entry| !crate::blueprint::is_vhdl_row(entry))
         .cloned()
         .collect();
     if !foreign.is_empty() {

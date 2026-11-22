@@ -338,42 +338,42 @@ fn a_broken_cocotb_install_is_a_loud_usage_error_before_any_runner_script() {
 }
 
 #[test]
-#[ignore = "needs cocotb (2.x) and ghdl on PATH; run with `cargo test -- --ignored`"]
-fn the_real_cocotb_drive_rejects_the_verilog_fileset_loudly() {
+#[ignore = "needs cocotb and ghdl on PATH; run with `cargo test -- --ignored`"]
+fn the_real_cocotb_drive_carries_allhdl_rows_by_their_extension() {
+    // The shipped targets ride the ALLHDL custom fileset: the blueprint's
+    // rows carry ALLHDL, not VHDL -- the sim face routes them by file
+    // EXTENSION (the probed fileset semantics), never by the raw fileset
+    // string. Probed live (cocotb 2.1.0, ghdl 6.0.0).
     if !cocotb_available() || !ghdl_available() {
         eprintln!("skipping: no cocotb runner or ghdl on PATH");
         return;
     }
 
-    let out = std::env::temp_dir().join(format!("orbit-drives-coco-nc-{}", std::process::id()));
+    let out = std::env::temp_dir().join(format!("orbit-drives-coco-allhdl-{}", std::process::id()));
     fs::create_dir_all(&out).unwrap();
     write_fixture(&out);
-    write(&out.join("blueprint.tsv"), "VLOG\twork\t./gate.v\n");
+    write(&out.join("blueprint.tsv"), "ALLHDL\twork\t./counter.vhd\n");
 
-    // The ghdl backend compiles VHDL only (probed): a VLOG blueprint is
-    // the loud not-carried face, exit 2, before any runner spawn.
-    let not_carried = spawn_shape(
+    let run = spawn_shape(
         Command::new(env!("CARGO_BIN_EXE_orbit-drives"))
             .arg("cocotb")
             .arg("--test-module")
             .arg("test_counter.py"),
         &out,
-        "gate",
+        "counter",
     )
     .output()
     .unwrap();
-    assert_eq!(
-        not_carried.status.code(),
-        Some(2),
-        "a VLOG blueprint must be the loud not-carried face:\n{}{}",
-        String::from_utf8_lossy(&not_carried.stdout),
-        String::from_utf8_lossy(&not_carried.stderr)
-    );
     assert!(
-        String::from_utf8_lossy(&not_carried.stderr)
-            .contains("the cocotb drive carries the VHDL fileset"),
-        "the not-carried face should name the drive's fileset:\n{}",
-        String::from_utf8_lossy(&not_carried.stderr)
+        run.status.success(),
+        "the ALLHDL row should ride by extension, not be refused:\n{}{}",
+        String::from_utf8_lossy(&run.stdout),
+        String::from_utf8_lossy(&run.stderr)
+    );
+    let stdout = String::from_utf8_lossy(&run.stdout);
+    assert!(
+        stdout.contains("counter: pass"),
+        "the ALLHDL clean pass should report pass:\n{stdout}"
     );
     fs::remove_dir_all(&out).ok();
 }
