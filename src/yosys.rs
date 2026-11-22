@@ -134,6 +134,16 @@ pub enum DriveError {
     /// The stale netlist directory could not be reset: usage-class,
     /// exit 2.
     Library(String),
+    /// The graph declares differing stds, and yosys reads one Verilog
+    /// set per synth invocation: usage-class, exit 2. yosys's frontend
+    /// carries no std selector at all (see `std_note`), so a declared
+    /// std can only be checked for agreement, never applied.
+    MixedStd {
+        /// The first differing std token seen.
+        first: String,
+        /// The std token that differed.
+        second: String,
+    },
     /// A top failed to synthesize: findings, exit 1 (yosys's exit is
     /// honest there -- every probed failure exits 1 -- and the judge is
     /// the second witness on the same log).
@@ -153,7 +163,8 @@ impl DriveError {
             DriveError::Blueprint(_)
             | DriveError::NotCarried(_)
             | DriveError::Spawn(_)
-            | DriveError::Library(_) => 2,
+            | DriveError::Library(_)
+            | DriveError::MixedStd { .. } => 2,
             DriveError::Synth { .. } => 1,
         }
     }
@@ -169,6 +180,12 @@ impl fmt::Display for DriveError {
             DriveError::NotCarried(e) => write!(f, "{e}"),
             DriveError::Spawn(message) => write!(f, "{message}"),
             DriveError::Library(message) => write!(f, "{message}"),
+            DriveError::MixedStd { first, second } => write!(
+                f,
+                "the graph declares differing stds ({first}, {second}) -- yosys reads \
+                 one Verilog set per synth invocation and its frontend carries no \
+                 std selector; align the projects' std fields"
+            ),
             DriveError::Synth { top, .. } => write!(f, "the yosys synth failed for {top}"),
         }
     }
@@ -245,10 +262,40 @@ pub fn drive(request: &Drive) -> Result<(), DriveError> {
     // filter lives with the blueprint machinery, its message with the
     // first Verilog drive. yosys is a Verilog synthesis engine: VHDL
     // rides nothing here, the same loud not-carried face as on verilator.
-    let files = verilog_only(&entries).map_err(|e| {
+    let carried = crate::blueprint::verilog_entries(&entries).map_err(|e| {
         eprintln!("orbit-drives: yosys: error: {e}");
         DriveError::NotCarried(e)
     })?;
+    let files: Vec<std::path::PathBuf> =
+        carried.iter().map(|entry| entry.path.clone()).collect();
+    // The fork's orbit#24 face, honest about yosys's own limits: the
+    // read_verilog frontend carries no std selector, so a declared std
+    // is checked for graph-wide agreement (one `read_verilog` per synth
+    // invocation) and then named in a note -- never silently dropped.
+    let mut seen: Option<String> = None;
+    for entry in &carried {
+        if let Some(token) = crate::stdmap::row_std(entry.std.as_deref()) {
+            match &seen {
+                None => seen = Some(token),
+                Some(prev) if prev == &token => {}
+                Some(prev) => {
+                    let e = DriveError::MixedStd {
+                        first: prev.clone(),
+                        second: token,
+                    };
+                    eprintln!("orbit-drives: yosys: error: {e}");
+                    return Err(e);
+                }
+            }
+        }
+    }
+    if let Some(token) = &seen {
+        eprintln!(
+            "orbit-drives: yosys: note: the graph declares std {token}, but yosys's \
+             read_verilog frontend carries no std selector -- riding the \
+             frontend default"
+        );
+    }
 
     println!(
         "orbit-drives: yosys: build: synthesizing {} Verilog file(s), order-free \

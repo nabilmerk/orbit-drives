@@ -289,6 +289,13 @@ pub enum DriveError {
     /// The stale library state files could not be wiped: usage-class,
     /// exit 2.
     Library(String),
+    /// A row's declared language standard names a revision ghdl does not
+    /// carry: usage-class, exit 2 -- the fork's orbit#24 face hands the
+    /// token over, the mapping answers None, the design is not broken.
+    StdUnsupported {
+        /// The std token the blueprint or `ORBIT_STD` declared.
+        token: String,
+    },
     /// Files never analyzed after the deferral loop exhausted: findings,
     /// exit 1.
     Analyze(AnalyzeReport),
@@ -311,7 +318,8 @@ impl DriveError {
             DriveError::Blueprint(_)
             | DriveError::NotCarried(_)
             | DriveError::Spawn(_)
-            | DriveError::Library(_) => 2,
+            | DriveError::Library(_)
+            | DriveError::StdUnsupported { .. } => 2,
             DriveError::Analyze(_) | DriveError::Elaborate { .. } | DriveError::Findings(_) => 1,
         }
     }
@@ -369,6 +377,18 @@ pub fn drive(request: &Drive, mode: Mode) -> Result<(), DriveError> {
         DriveError::NotCarried(e)
     })?;
 
+    // The std pre-flight: every row's selector resolves before the
+    // deferral loop burns passes on a token ghdl cannot carry -- the
+    // fork's orbit#24 face, resolved once per row, loudly when refused.
+    let std_flags_of_row: Vec<Vec<String>> = carried
+        .iter()
+        .map(|entry| row_std_flags(entry.std.as_deref()))
+        .collect::<Result<Vec<Vec<String>>, DriveError>>()
+        .map_err(|e| {
+            eprintln!("orbit-drives: ghdl: error: no std selector for the row's std: {e:?}");
+            e
+        })?;
+
     println!(
         "orbit-drives: ghdl: {label}: analyzing {} VHDL file(s) in blueprint order",
         carried.len()
@@ -379,13 +399,13 @@ pub fn drive(request: &Drive, mode: Mode) -> Result<(), DriveError> {
         // declares -- the §25 face, the column consumed verbatim. The
         // deferral loop hands back exactly the paths it was given, and
         // those came from these entries: the lookup cannot miss.
-        let library = carried
+        let index = carried
             .iter()
-            .find(|entry| entry.path == file)
-            .expect("the deferral loop hands back the blueprint's own paths")
-            .library
-            .clone();
-        analyze_once(file, &library)
+            .position(|entry| entry.path == file)
+            .expect("the deferral loop hands back the blueprint's own paths");
+        let library = carried[index].library.clone();
+        let std_flags = std_flags_of_row[index].clone();
+        analyze_once(file, &library, &std_flags)
     });
     println!(
         "orbit-drives: ghdl: {label}: {} file(s) analyzed in {} pass(es)",
@@ -419,7 +439,14 @@ pub fn drive(request: &Drive, mode: Mode) -> Result<(), DriveError> {
         // The top's library rides every command (`--work=<library>`):
         // ghdl's bare-top commands search the work library only, so the
         // pin is load-bearing -- see `top_library`.
-        elaborate.args(command_args("-e", &top_library)).arg(top);
+        let std_flags = run_std_flags().map_err(|e| {
+            eprintln!("orbit-drives: ghdl: error: {e:?}");
+            e
+        })?;
+        elaborate
+            .args(command_args("-e", &top_library))
+            .args(std_flags)
+            .arg(top);
         // The extras ride the drive's last step verbatim: the run argv on
         // the sim face, the elaboration argv on the build face (there is
         // no run to carry them, and silently dropping a user argument
@@ -485,8 +512,13 @@ fn run_top(
     println!("orbit-drives: ghdl: {label}: running {top}");
     // `--assert-level=error` rides AFTER the top unit: it is a
     // simulation option, and ghdl rejects it anywhere earlier.
+    let std_flags = run_std_flags().map_err(|e| {
+        eprintln!("orbit-drives: ghdl: error: {e:?}");
+        e
+    })?;
     let mut run = Command::new(GHDL_BIN);
     run.args(command_args("-r", library))
+        .args(std_flags)
         .arg(top)
         .arg(assert_level_arg())
         .args(extra);
@@ -505,9 +537,12 @@ fn run_top(
 /// argv (`-a`, then the global pins), and the work library is what makes
 /// the attempt multi-library: the file lands in the library file of the
 /// library its blueprint row declares.
-fn analyze_once(file: &Path, library: &str) -> Result<(), String> {
+fn analyze_once(file: &Path, library: &str, std_flags: &[String]) -> Result<(), String> {
     let mut command = Command::new(GHDL_BIN);
-    command.args(command_args("-a", library)).arg(file);
+    command
+        .args(command_args("-a", library))
+        .args(std_flags)
+        .arg(file);
     match capture(GHDL_BIN, &mut command) {
         Ok(output) if output.status.success() => Ok(()),
         Ok(output) => Err(lossy(&output.stderr)),
@@ -534,6 +569,36 @@ fn command_args(command: &str, library: &str) -> Vec<String> {
     args.extend(extra_flags());
     args.push(format!("--work={library}"));
     args
+}
+
+/// The std selector pieces for one std token, or the loud refusal: the
+/// fork's orbit#24 face mapped through ghdl's spellings (see
+/// [`crate::stdmap`] for the probed table). The drive prints the face
+/// itself before returning the error.
+fn std_flags_for(token: &str) -> Result<Vec<String>, DriveError> {
+    crate::stdmap::vhdl_flag(crate::stdmap::Tool::Ghdl, token).ok_or(DriveError::StdUnsupported {
+        token: String::from(token),
+    })
+}
+
+/// Resolves one row's std pieces: a row that declares a std (blueprint
+/// trailing field, else `ORBIT_STD`) carries the mapped `--std=` flag;
+/// a row with nothing declared rides ghdl's default unchanged -- the
+/// 2026-11-08 un-pinning stands wherever no std face speaks.
+fn row_std_flags(entry_std: Option<&str>) -> Result<Vec<String>, DriveError> {
+    match crate::stdmap::row_std(entry_std) {
+        Some(token) => std_flags_for(&token),
+        None => Ok(Vec::new()),
+    }
+}
+
+/// The std pieces for the elaborate and run faces: no blueprint row
+/// applies there, so only the run-wide `ORBIT_STD` face speaks.
+fn run_std_flags() -> Result<Vec<String>, DriveError> {
+    match crate::stdmap::row_std(None) {
+        Some(token) => std_flags_for(&token),
+        None => Ok(Vec::new()),
+    }
 }
 
 /// The library that holds the tops -- the `--work` pin on the elaborate
@@ -966,6 +1031,22 @@ tb_err.vhd:9:5:@0ms:(report note): simulation continued
             "a directory named like a library file is not ghdl's state"
         );
         fs::remove_dir_all(&dir).ok();
+    }
+
+    #[test]
+    fn the_std_face_rides_rows_and_refuses_unknown_tokens() {
+        // the fork's orbit#24 face: a declared row maps to ghdl's spelling
+        assert_eq!(
+            row_std_flags(Some("2008")).unwrap(),
+            vec![String::from("--std=08")]
+        );
+        // the 2026-11-08 un-pinning stands where nothing declares
+        assert_eq!(row_std_flags(None).unwrap(), Vec::<String>::new());
+        // ghdl 6.0 dropped the VHDL-87 selector: the loud refusal
+        assert!(matches!(
+            std_flags_for("87"),
+            Err(DriveError::StdUnsupported { .. })
+        ));
     }
 
     #[test]

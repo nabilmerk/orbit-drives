@@ -32,7 +32,7 @@ use std::fmt;
 use std::fs;
 use std::process::Command;
 
-use crate::blueprint::{parse_blueprint, plan_note, verilog_only, BlueprintError, Drive, Mode};
+use crate::blueprint::{parse_blueprint, plan_note, BlueprintError, Drive, Entry, Mode};
 use crate::contracts::{self, Tool};
 use crate::iverilog::NotCarried;
 use crate::proc::{capture, eprint_block, join_log, lossy, print_block};
@@ -48,6 +48,44 @@ pub const VERILATOR_BIN: &str = "verilator";
 /// rides after `--lint-only` and before the files, and again on every
 /// build argv.
 pub const TIMING: &str = "--timing";
+
+/// Resolves the ONE `--language` pair the single lint and every build
+/// carry: the fork's orbit#24 face. Every row's std resolves (row
+/// token, else `ORBIT_STD`); all resolved rows must agree -- verilator
+/// compiles one analysis set under one selector -- and any token
+/// verilator does not carry refuses loudly. Nothing declared: no
+/// language pair rides (verilator's own default, the v1 honest limit).
+fn resolved_language(carried: &[Entry]) -> Result<Vec<String>, DriveError> {
+    let mut language: Option<Vec<String>> = None;
+    let mut seen: Option<String> = None;
+    for entry in carried {
+        if let Some(token) = crate::stdmap::row_std(entry.std.as_deref()) {
+            let is_sv = matches!(
+                entry.path.extension().and_then(|ext| ext.to_str()),
+                Some("sv")
+            );
+            let flag =
+                crate::stdmap::verilog_flag(crate::stdmap::Tool::Verilator, &token, is_sv)
+                    .ok_or(DriveError::StdUnsupported {
+                        token: token.clone(),
+                    })?;
+            match &seen {
+                None => {
+                    seen = Some(token);
+                    language = Some(flag);
+                }
+                Some(prev) if prev == &token => {}
+                Some(prev) => {
+                    return Err(DriveError::MixedStd {
+                        first: prev.clone(),
+                        second: token,
+                    })
+                }
+            }
+        }
+    }
+    Ok(language.unwrap_or_default())
+}
 
 /// The model directory verilator builds into (`--Mdir`'s default,
 /// probed). It is verilator's clock: the per-top model binaries
@@ -110,6 +148,23 @@ pub enum DriveError {
     Spawn(String),
     /// The stale model directory could not be wiped: usage-class, exit 2.
     Library(String),
+    /// A row's declared language standard names a revision verilator does
+    /// not carry: usage-class, exit 2 -- the fork's orbit#24 face hands
+    /// the token over, the mapping answers None, the design is not
+    /// broken.
+    StdUnsupported {
+        /// The std token the blueprint or `ORBIT_STD` declared.
+        token: String,
+    },
+    /// The graph declares differing stds, and verilator lints and builds
+    /// ONE analysis set under ONE `--language` selector: usage-class,
+    /// exit 2.
+    MixedStd {
+        /// The first differing std token seen.
+        first: String,
+        /// The std token that differed.
+        second: String,
+    },
     /// The lint failed: findings, exit 1 (verilator's lint exit is
     /// honest: exit 1 on a lint error, on an unknown `--top-module`, and
     /// on an enabled warning, probed live).
@@ -137,7 +192,9 @@ impl DriveError {
             DriveError::Blueprint(_)
             | DriveError::NotCarried(_)
             | DriveError::Spawn(_)
-            | DriveError::Library(_) => 2,
+            | DriveError::Library(_)
+            | DriveError::StdUnsupported { .. }
+            | DriveError::MixedStd { .. } => 2,
             DriveError::Lint { .. } | DriveError::Build { .. } | DriveError::Findings(_) => 1,
         }
     }
@@ -153,6 +210,18 @@ impl fmt::Display for DriveError {
             DriveError::NotCarried(e) => write!(f, "{e}"),
             DriveError::Spawn(message) => write!(f, "{message}"),
             DriveError::Library(message) => write!(f, "{message}"),
+            DriveError::StdUnsupported { token } => write!(
+                f,
+                "no std selector for \"{token}\": verilator carries 1364-1995, 1364-2001, \
+                 1364-2005, 1800-2005, 1800-2012, and 1800-2017 -- the row's std \
+                 (or ORBIT_STD) names a revision verilator does not"
+            ),
+            DriveError::MixedStd { first, second } => write!(
+                f,
+                "the graph declares differing stds ({first}, {second}) -- verilator \
+                 lints and builds one analysis set under one --language selector; \
+                 align the projects' std fields or ride the tool default"
+            ),
             DriveError::Lint { .. } => write!(f, "the verilator lint failed"),
             DriveError::Build { top, .. } => write!(f, "the verilator build failed for {top}"),
             DriveError::Findings(findings) => {
@@ -232,9 +301,15 @@ pub fn drive(request: &Drive, mode: Mode) -> Result<(), DriveError> {
     // verilator carry the same VLOG and SYSV filesets -- the filter lives
     // with the blueprint machinery, its message with the first Verilog
     // drive.
-    let files = verilog_only(&entries).map_err(|e| {
+    let carried = crate::blueprint::verilog_entries(&entries).map_err(|e| {
         eprintln!("orbit-drives: verilator: error: {e}");
         DriveError::NotCarried(e)
+    })?;
+    let files: Vec<std::path::PathBuf> =
+        carried.iter().map(|entry| entry.path.clone()).collect();
+    let language = resolved_language(&carried).map_err(|e| {
+        eprintln!("orbit-drives: verilator: error: {e}");
+        e
     })?;
 
     println!(
@@ -242,7 +317,7 @@ pub fn drive(request: &Drive, mode: Mode) -> Result<(), DriveError> {
          (order-free, probed live 2026-11-07)",
         files.len()
     );
-    lint_once(&files, &request.tops).map_err(|stderr| {
+    lint_once(&files, &request.tops, &language).map_err(|stderr| {
         eprint_block(&stderr);
         eprintln!("orbit-drives: verilator: error: the verilator lint failed");
         DriveError::Lint { stderr }
@@ -263,7 +338,7 @@ pub fn drive(request: &Drive, mode: Mode) -> Result<(), DriveError> {
         } else {
             None
         };
-        build_top(top, &files, build_extra).map_err(|stderr| {
+        build_top(top, &files, &language, build_extra).map_err(|stderr| {
             eprint_block(&stderr);
             eprintln!("orbit-drives: verilator: error: the verilator build failed for {top}");
             DriveError::Build {
@@ -314,9 +389,13 @@ pub fn drive(request: &Drive, mode: Mode) -> Result<(), DriveError> {
 /// (`%Error: Specified --top-module 'nosuch' was not found in design.`,
 /// exit 1, probed at the build), and the lint and build exits are
 /// honest, so both faces gate on the exit alone.
-fn lint_once(files: &[std::path::PathBuf], tops: &[String]) -> Result<(), String> {
+fn lint_once(
+    files: &[std::path::PathBuf],
+    tops: &[String],
+    language: &[String],
+) -> Result<(), String> {
     let mut lint = Command::new(VERILATOR_BIN);
-    lint.arg("--lint-only").arg(TIMING);
+    lint.arg("--lint-only").arg(TIMING).args(language);
     for top in tops {
         lint.arg("--top-module").arg(top);
     }
@@ -335,6 +414,7 @@ fn lint_once(files: &[std::path::PathBuf], tops: &[String]) -> Result<(), String
 fn build_top(
     top: &str,
     files: &[std::path::PathBuf],
+    language: &[String],
     extra: Option<&[String]>,
 ) -> Result<(), String> {
     let mut build = Command::new(VERILATOR_BIN);
@@ -342,6 +422,7 @@ fn build_top(
         .arg("--binary")
         .arg("--build")
         .arg(TIMING)
+        .args(language)
         .arg("--top-module")
         .arg(top)
         .args(files);
@@ -575,6 +656,45 @@ all quiet
             "the note should name the plan: {note}"
         );
         assert!(note.starts_with("orbit-drives: verilator: note:"));
+    }
+
+    #[test]
+    fn the_std_face_resolves_one_language_or_refuses() {
+        use crate::blueprint::parse_blueprint;
+        // nothing declared: no language pair rides (the v1 honest limit)
+        let carried =
+            crate::blueprint::verilog_entries(&parse_blueprint("VLOG\twork\t./a.v\n").unwrap())
+                .unwrap();
+        assert_eq!(resolved_language(&carried).unwrap(), Vec::<String>::new());
+        // one declared token maps through the probed spellings
+        let carried = crate::blueprint::verilog_entries(
+            &parse_blueprint("SYSV\twork\t./a.sv\t2017\n").unwrap(),
+        )
+        .unwrap();
+        assert_eq!(
+            resolved_language(&carried).unwrap(),
+            vec![String::from("--language"), String::from("1800-2017")]
+        );
+        // differing tokens refuse: one analysis set, one selector
+        let carried = crate::blueprint::verilog_entries(
+            &parse_blueprint("VLOG\twork\t./a.v\t2005\nVLOG\twork\t./b.v\t2012\n")
+                .unwrap(),
+        )
+        .unwrap();
+        assert!(matches!(
+            resolved_language(&carried),
+            Err(DriveError::MixedStd { .. })
+        ));
+        // an sv token with no verilator spelling refuses
+        let carried = crate::blueprint::verilog_entries(
+            &parse_blueprint("VLOG\twork\t./a.v\t95\nVLOG\twork\t./b.sv\t95\n")
+                .unwrap(),
+        )
+        .unwrap();
+        assert!(matches!(
+            resolved_language(&carried),
+            Err(DriveError::StdUnsupported { .. })
+        ));
     }
 
     #[test]

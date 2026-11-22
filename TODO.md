@@ -15,6 +15,15 @@
 
 ## Parked
 
+- the cocotb and quartus sim faces' raw `fileset != "VHDL"` filter
+  (cocotb.rs / quartus.rs): it bypasses the ALLHDL-by-extension routing
+  every shipped target rides (`is_vhdl_row`), so an ALLHDL blueprint's
+  `.vhd` rows are refused exit-2 through those two faces -- surfaced by
+  the fork campaign's code map, 2026-11-22.
+- the vivado std face: xvhdl/xvlog std selectors unmapped in v1 (the
+  tool is absent on this box; the fork's orbit#24 std rides every other
+  drive).
+
 - the honest-limits duplicated run-log bullet (a merge-candidate on the
   next touch).
 - the quickstart prose-vs-link polish.

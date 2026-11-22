@@ -49,6 +49,7 @@
 //!   compile.
 
 pub mod blueprint;
+pub mod stdmap;
 pub mod cocotb;
 pub mod contracts;
 pub mod ghdl;

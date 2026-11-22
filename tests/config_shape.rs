@@ -57,6 +57,36 @@ fn every_target_entry_carries_the_allhdl_fileset() {
 }
 
 #[test]
+fn every_target_declares_exactly_one_verb() {
+    // The fork's chaseruskin/orbit#25 face: the seven sim/test faces
+    // declare `test = true` + `build = false`, the seven build faces the
+    // inverse -- orbit validates the verb/target pair at the CLI.
+    let blocks = target_blocks();
+    assert_eq!(blocks.len(), 14, "the fragment ships 14 target entries");
+    let mut test_faces = 0;
+    let mut build_faces = 0;
+    for block in &blocks {
+        let name = block
+            .lines()
+            .find(|line| line.starts_with("name = "))
+            .unwrap_or("(no name)");
+        let is_test_face = block.contains("test = true\nbuild = false\n");
+        let is_build_face = block.contains("build = true\ntest = false\n");
+        assert!(
+            is_test_face ^ is_build_face,
+            "the {name} target must declare exactly one verb:\n{block}"
+        );
+        if is_test_face {
+            test_faces += 1;
+        } else {
+            build_faces += 1;
+        }
+    }
+    assert_eq!(test_faces, 7, "seven sim/test faces");
+    assert_eq!(build_faces, 7, "seven build faces");
+}
+
+#[test]
 fn the_fileset_line_rides_inside_each_target_entry() {
     // The fileset key lives INSIDE the [[target]] entry (immediately
     // after its `command`, before the next entry) -- the
@@ -73,8 +103,15 @@ fn the_fileset_line_rides_inside_each_target_entry() {
     let mut adjacencies = 0;
     for (index, line) in lines.iter().enumerate() {
         if line.starts_with("command = ")
+            // the capability lines ride between command and fileset (the
+            // fork's chaseruskin/orbit#25 face): command, then the two
+            // verb declarations, then the ALLHDL fileset
+            && lines.get(index + 1).map(|next| {
+                next.starts_with("test = ") || next.starts_with("build = ")
+            })
+            .unwrap_or(false)
             && lines
-                .get(index + 1)
+                .get(index + 3)
                 .map(|next| next.starts_with("fileset.ALLHDL"))
                 .unwrap_or(false)
         {
@@ -83,8 +120,8 @@ fn the_fileset_line_rides_inside_each_target_entry() {
     }
     assert_eq!(
         adjacencies, entries,
-        "every target entry's command should be immediately followed by its ALLHDL \
-         fileset line"
+        "every target entry's command should be followed by its two capability \
+         lines and then its ALLHDL fileset line"
     );
 }
 

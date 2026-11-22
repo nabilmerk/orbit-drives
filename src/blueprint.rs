@@ -51,6 +51,11 @@ pub struct Entry {
     pub library: String,
     /// The file path, as the blueprint wrote it.
     pub path: PathBuf,
+    /// The owning project's declared language standard (the fork's
+    /// chaseruskin/orbit#24 face): the trailing blueprint field when any
+    /// project in the graph declares one, empty for an undeclared
+    /// project, absent entirely on a 3-field row.
+    pub std: Option<String>,
 }
 
 /// The error for a blueprint line that is not
@@ -111,8 +116,11 @@ impl std::error::Error for BlueprintError {
 
 /// Parse the TSV blueprint text into entries, in file order.
 ///
-/// Blank lines are skipped; anything else must carry exactly three
-/// tab-separated fields.
+/// Blank lines are skipped; anything else must carry three
+/// tab-separated fields, plus an optional trailing fourth field: the
+/// owning project's declared language standard (the fork's orbit#24
+/// face). An empty fourth field parses as no std. More than four fields
+/// is a loud malformed line.
 pub fn parse_blueprint(text: &str) -> Result<Vec<Entry>, MalformedLine> {
     let mut entries = Vec::new();
     for (index, raw) in text.lines().enumerate() {
@@ -121,17 +129,25 @@ pub fn parse_blueprint(text: &str) -> Result<Vec<Entry>, MalformedLine> {
             continue;
         }
         let fields: Vec<&str> = line.split('\t').collect();
-        if fields.len() != 3 {
+        if fields.len() != 3 && fields.len() != 4 {
             return Err(MalformedLine {
                 line: index + 1,
                 text: line.to_string(),
             });
         }
+        let std = match fields.len() {
+            4 => match fields[3].trim().is_empty() {
+                true => None,
+                false => Some(fields[3].trim().to_string()),
+            },
+            _ => None,
+        };
         entries.push(Entry {
             line: index + 1,
             fileset: fields[0].to_string(),
             library: fields[1].to_string(),
             path: PathBuf::from(fields[2]),
+            std,
         });
     }
     Ok(entries)
@@ -327,13 +343,23 @@ pub fn vhdl_only(entries: &[Entry]) -> Result<Vec<PathBuf>, NotCarried> {
 /// [`crate::iverilog::NotCarried`] -- its message names the filesets, not
 /// one drive, because two drives carry it.
 pub fn verilog_only(entries: &[Entry]) -> Result<Vec<PathBuf>, crate::iverilog::NotCarried> {
+    verilog_entries(entries)
+        .map(|carried| carried.iter().map(|entry| entry.path.clone()).collect())
+}
+
+/// The Verilog/SV entries of the blueprint, in blueprint order -- the
+/// std-carrying shape the Verilog drives' single-set std face consumes
+/// (the fork's orbit#24 face: the rows carry their owning project's
+/// std, and a one-shot compiler needs the entries, not bare paths, to
+/// check its one-analysis-set rule).
+pub fn verilog_entries(entries: &[Entry]) -> Result<Vec<Entry>, crate::iverilog::NotCarried> {
     let foreign: Vec<Entry> = entries
         .iter()
         .filter(|entry| !is_verilog_row(entry))
         .cloned()
         .collect();
     if foreign.is_empty() {
-        Ok(entries.iter().map(|entry| entry.path.clone()).collect())
+        Ok(entries.to_vec())
     } else {
         Err(crate::iverilog::NotCarried { entries: foreign })
     }
@@ -454,8 +480,26 @@ mod tests {
     }
 
     #[test]
+    fn blueprint_carries_the_std_column_when_present() {
+        // orbit (the fork, chaseruskin/orbit#24) appends the owning
+        // project's std as the trailing field when any project in the
+        // graph declares one
+        let entries = parse_blueprint("VHDL\twork\t./a.vhd\t93\nVHDL\twork\t./b.vhd\t\n")
+            .unwrap();
+        assert_eq!(entries[0].std.as_deref(), Some("93"));
+        // an empty trailing field is an undeclared std
+        assert_eq!(entries[1].std, None);
+    }
+
+    #[test]
+    fn blueprint_keeps_three_field_rows_stdless() {
+        let entries = parse_blueprint("VHDL\twork\t./a.vhd\n").unwrap();
+        assert_eq!(entries[0].std, None);
+    }
+
+    #[test]
     fn blueprint_rejects_an_extra_field_loudly() {
-        let err = parse_blueprint("VHDL\twork\t./a.vhd\textra\n").unwrap_err();
+        let err = parse_blueprint("VHDL\twork\t./a.vhd\t93\textra\n").unwrap_err();
         assert_eq!(err.line, 1);
     }
 

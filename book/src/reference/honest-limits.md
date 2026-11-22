@@ -111,15 +111,24 @@
   their filesets as given (`VHDL_FILE` / `VERILOG_FILE` lines, no
   library) -- a multi-library orbit project on quartus stays out of
   scope for v1.
-- **The standards are pinned where the tools pin them** (`--std=2008`
-  for nvc, `-g2012` for iverilog, `-2008` for the
-  quartus sim face's vcom -- vcom's spelling of the same VHDL-2008 pin;
-  verilator's pinned flags are `--timing` and the face flags -- its
-  language setting stays verilator's default in v1; cocotb's backing
-  simulator compiles under ghdl's runner default, no std pin in v1;
-  ghdl pins NONE -- the drive rides ghdl's own default, VHDL-93 on ghdl
-  6.0.0, since the 2026-11-08 std face: see the ghdl drive) and
-  cannot be overridden from the argv yet; the extras reach the drive's
+- **The standards resolve through the fork's orbit#24 face first**
+  (2026-11-22): a project's `[project] std` field rides every blueprint
+  row and the run-wide `ORBIT_STD`, and each drive maps the token onto
+  its tool's own selector through the probed table in `src/stdmap.rs` --
+  ghdl `--std=93|08|19` (ghdl 6.0 dropped the 87 selector, probed), nvc
+  `--std=1993|2008|2019`, iverilog `-g1995|-g2001|-g2005|-g2005-sv|-g2012`,
+  verilator `--language 1364-*|1800-*`, vcom `-87|-93|-2008`
+  (DOCUMENTED-ONLY), cocotb through ghdl's spellings on the runner's
+  `build_args`. A token the tool does not carry is the loud exit-2
+  naming tool and token; the one-shot compilers (iverilog, verilator,
+  yosys, the quartus build face, the cocotb runner) refuse a graph that
+  declares differing stds -- they compile one analysis set under one
+  selector. WHERE NOTHING DECLARES A STD, the old pins stand exactly:
+  `--std=2008` for nvc, `-g2012` for iverilog, `-2008` for the quartus
+  sim face's vcom; verilator and cocotb ride their tools' defaults; ghdl
+  pins NONE -- its own default, VHDL-93 on ghdl 6.0.0, since the
+  2026-11-08 std face; yosys notes a declared std and rides the frontend
+  default (no selector exists). The extras reach the drive's
   last step only (`-r` on the VHDL sim faces, `vvp` on iverilog's, the
   model argv on verilator's, the `yosys -p` synth argv on yosys's, the
   runner's `test_args` on cocotb's; the elaboration / compile / build

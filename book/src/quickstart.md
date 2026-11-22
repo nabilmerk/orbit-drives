@@ -25,7 +25,30 @@ default-bound entities a reference walk cannot see ride like any other
 file (the why and the probed semantics live in the honest limits'
 fileset bullet). The drives route ALLHDL rows by their file extension.
 
-Then run the target:
+Or bind the faces once, in the project's Orbit.toml (the fork's
+chaseruskin/orbit#25 face), and run without naming a target:
+
+```toml
+[project]
+# ...
+std = "93"          # optional: rides to the drives as the std selector
+
+[toolchain]
+build = "nvc-build"
+test = "nvc"
+```
+
+```sh
+orbit test
+```
+
+The verb/target pair is validated at the CLI (`orbit test --target
+nvc-build` dies there: nvc-build declares `build` only), a single
+in-scope target is inferred, and a declared std rides every blueprint
+row to the drives, which map it onto the tool's own selector (the
+probed table lives in the honest limits' standards bullet).
+
+Then run a target by name:
 
 ```sh
 orbit test --target ghdl -- -gW=4 --vcd=waves.vcd

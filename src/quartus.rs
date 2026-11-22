@@ -74,6 +74,58 @@ pub const QUESTA_SUBDIR: &str = "questa_fse";
 /// hypothesis.
 pub const STD: &str = "-2008";
 
+/// Maps one std token onto vcom's spelling, or refuses loudly: the
+/// fork's orbit#24 face through the documented ModelSim spellings.
+/// DOCUMENTED-ONLY: the quartus family is absent on this box. The
+/// drive prints the face itself before returning the error.
+fn std_flag_for(token: &str) -> Result<String, DriveError> {
+    crate::stdmap::vhdl_flag(crate::stdmap::Tool::Quartus, token)
+        .map(|mut argv| argv.remove(0))
+        .ok_or(DriveError::StdUnsupported {
+            token: String::from(token),
+        })
+}
+
+/// Resolves one row's vcom std flag: a row that declares a std
+/// (blueprint trailing field, else `ORBIT_STD`) carries the mapped
+/// flag; a row with nothing declared rides the pinned `-2008` default.
+fn row_std_flag(entry_std: Option<&str>) -> Result<String, DriveError> {
+    match crate::stdmap::row_std(entry_std) {
+        Some(token) => std_flag_for(&token),
+        None => Ok(String::from(STD)),
+    }
+}
+
+/// The single-set check for the build face: quartus_map reads one
+/// project set through the generated .qsf, and its flow carries no
+/// std selector in v1 -- differing declared stds refuse; one declared
+/// std names itself in a note, never silently dropped.
+fn check_single_set(carried: &[crate::blueprint::Entry]) -> Result<(), DriveError> {
+    let mut seen: Option<String> = None;
+    for entry in carried {
+        if let Some(token) = crate::stdmap::row_std(entry.std.as_deref()) {
+            match &seen {
+                None => seen = Some(token),
+                Some(prev) if prev == &token => {}
+                Some(prev) => {
+                    return Err(DriveError::MixedStd {
+                        first: prev.clone(),
+                        second: token,
+                    })
+                }
+            }
+        }
+    }
+    if let Some(token) = &seen {
+        eprintln!(
+            "orbit-drives: quartus: note: the graph declares std {token}, but the \
+             quartus_map synthesis flow carries no std selector in v1 -- riding \
+             the tool default"
+        );
+    }
+    Ok(())
+}
+
 /// The Questa work library every file compiles into (`-work work`). The
 /// blueprint's library column is carried, not mapped -- one `work`
 /// library, like every drive but the VHDL ones (ghdl and nvc consume the
@@ -237,6 +289,22 @@ pub enum DriveError {
     Spawn(String),
     /// The run-scoped state could not be reset: usage-class, exit 2.
     Library(String),
+    /// A row's declared language standard names a revision vcom does not
+    /// carry: usage-class, exit 2 -- the fork's orbit#24 face hands the
+    /// token over, the mapping answers None, the design is not broken.
+    /// DOCUMENTED-ONLY: the vcom spellings come from ModelSim's docs.
+    StdUnsupported {
+        /// The std token the blueprint or `ORBIT_STD` declared.
+        token: String,
+    },
+    /// The graph declares differing stds on the build face, where
+    /// quartus_map reads one project set: usage-class, exit 2.
+    MixedStd {
+        /// The first differing std token seen.
+        first: String,
+        /// The std token that differed.
+        second: String,
+    },
     /// No FPGA part was named on the build face: usage-class, exit 2
     /// (the CLI gate fires first; the drive carries the same door for
     /// direct library callers, the cocotb `TestModule` door's shape).
@@ -273,7 +341,9 @@ impl DriveError {
             | DriveError::NotCarried(_)
             | DriveError::Spawn(_)
             | DriveError::Library(_)
-            | DriveError::Part => 2,
+            | DriveError::Part
+            | DriveError::StdUnsupported { .. }
+            | DriveError::MixedStd { .. } => 2,
             DriveError::Synth { .. } | DriveError::Compile { .. } | DriveError::Findings(_) => 1,
         }
     }
@@ -290,6 +360,18 @@ impl fmt::Display for DriveError {
             DriveError::Spawn(message) => write!(f, "{message}"),
             DriveError::Library(message) => write!(f, "{message}"),
             DriveError::Part => write!(f, "no part to synthesize"),
+            DriveError::StdUnsupported { token } => write!(
+                f,
+                "no std selector for \"{token}\": vcom carries -87, -93, and -2008 \
+                 (DOCUMENTED-ONLY) -- the row's std (or ORBIT_STD) names a revision \
+                 vcom does not"
+            ),
+            DriveError::MixedStd { first, second } => write!(
+                f,
+                "the graph declares differing stds ({first}, {second}) -- the \
+                 quartus_map synthesis flow reads one project set with no std \
+                 selector in v1; align the projects' std fields"
+            ),
             DriveError::Synth { top, .. } => write!(f, "the quartus_map synth failed for {top}"),
             DriveError::Compile { stage, .. } => write!(f, "the {stage} compile failed"),
             DriveError::Findings(findings) => {
@@ -393,6 +475,12 @@ fn drive_build(
     let (vhdl, verilog) = crate::blueprint::quartus_files(entries).map_err(|e| {
         eprintln!("orbit-drives: quartus: error: {e}");
         DriveError::NotCarried(e)
+    })?;
+    // The fork's orbit#24 face, honest about the synthesis flow: the
+    // .qsf reads one project set with no std selector in v1
+    check_single_set(entries).map_err(|e| {
+        eprintln!("orbit-drives: quartus: error: {e}");
+        e
     })?;
     println!(
         "orbit-drives: quartus: {label}: carrying {} VHDL and {} Verilog file(s) into the \
@@ -502,6 +590,16 @@ fn drive_sim(
         return Err(DriveError::NotCarried(e));
     }
     let files: Vec<PathBuf> = entries.iter().map(|entry| entry.path.clone()).collect();
+    // The std pre-flight: every row's vcom selector resolves before the
+    // deferral loop burns passes on a token vcom cannot carry
+    let std_flags: Vec<String> = entries
+        .iter()
+        .map(|entry| row_std_flag(entry.std.as_deref()))
+        .collect::<Result<Vec<String>, DriveError>>()
+        .map_err(|e| {
+            eprintln!("orbit-drives: quartus: error: {e}");
+            e
+        })?;
 
     // Open the work library and map it: `vlib work`, then `vmap work
     // work` (the ModelSim workflow's documented opening pair, UNPROBED).
@@ -529,8 +627,13 @@ fn drive_sim(
         files.len()
     );
     let report = analyze_with_deferral(&files, |file| {
+        let index = files.iter().position(|f| f == file);
+        let std_flag = index
+            .and_then(|i| std_flags.get(i))
+            .cloned()
+            .unwrap_or_else(|| String::from(STD));
         let mut compile = Command::new(&vcom);
-        compile.arg(STD).arg("-work").arg(WORK).arg(file);
+        compile.arg(std_flag).arg("-work").arg(WORK).arg(file);
         match capture(VCOM_BIN, &mut compile) {
             Ok(output) if output.status.success() => Ok(()),
             Ok(output) => Err(join_log(lossy(&output.stdout), lossy(&output.stderr))),
@@ -900,6 +1003,29 @@ sim done
             ..request
         };
         assert!(matches!(require_part(&empty), Err(DriveError::Part)));
+    }
+
+    #[test]
+    fn the_std_face_maps_vcom_spellings_or_refuses() {
+        // the fork's orbit#24 face through the documented ModelSim spellings
+        assert_eq!(row_std_flag(Some("93")).unwrap(), "-93");
+        assert_eq!(row_std_flag(Some("2008")).unwrap(), "-2008");
+        // nothing declared: the pinned default rides
+        assert_eq!(row_std_flag(None).unwrap(), STD);
+        // vhdl-2019 has no vcom spelling: the loud refusal
+        assert!(matches!(
+            row_std_flag(Some("2019")),
+            Err(DriveError::StdUnsupported { .. })
+        ));
+        // the build face's single-set check refuses mixed graphs
+        let carried = crate::blueprint::parse_blueprint(
+            "VHDL\twork\t./a.vhd\t93\nVHDL\twork\t./b.vhd\t2008\n",
+        )
+        .unwrap();
+        assert!(matches!(
+            check_single_set(&carried),
+            Err(DriveError::MixedStd { .. })
+        ));
     }
 
     #[test]
