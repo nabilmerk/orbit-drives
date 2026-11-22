@@ -226,3 +226,18 @@ Plain messages, no attribution lines (owner rule). Fork commits
 reference the upstream issue numbers (`(closes #23)` style, matching
 upstream CHANGELOG convention). Lowercase conventional subjects in the
 family style.
+
+## Verdicts and amendments (execution, 2026-11-22)
+
+| # | Verdict (evidence) | Amendment |
+|---|---|---|
+| 1 | Issue #25's "[[target]] parses clean" is wrong in mechanism: `deny_unknown_fields` makes it a loud parse error; the issue's transcript never loads the manifest (target selection precedes it) — re-probed | The fix became the teaching hint appended to that parse error, not a new loud face |
+| 2 | s3's catalog collision is CROSS-library (ip-c lib `ip-c` vs ip-b lib `dupe`) and upstream's DST exists for exactly that shape | Decision #23 rescoped: the relative branch qualifies by library; the catalog branch stays byte-identical (`dst.sh` green unchanged) |
+| 3 | In-process `Context` unit tests would touch the real `$HOME` (context construction reads the user config) | The resolution tiers extracted as the pure `resolve_target_name`; the CLI faces proven by the s11/s12 fixtures instead |
+| 4 | An always-on 4th blueprint column breaks upstream's own s7/s9 `comp.py` (`split('\t')[-1]` reads the path) | The std column is conditional: any declared std → all rows carry it; none → byte-identical 3-column |
+| 5 | The shipped orbit-drives targets ride the ALLHDL custom fileset, whose rows are `Auxiliary` entries — the first e2e probe showed std EMPTY through them | `Entry::Auxiliary` gained the std field; both custom-fileset add paths pass the owning project's std; s13 case A2 pins it |
+| 6 | ghdl 6.0 REJECTS `--std=87` (probed live); nvc accepts only 1993/2008/2019; the iverilog/verilator spellings probed live | The stdmap tables are probed facts with dates, not guesses; 87-through-ghdl and 2019-through-vcom are the loud exit-2 |
+| 7 | cocotb 2.1.0 installable on this box (`pip3 install --break-system-packages`); the ghdl runner's `build(build_args=[...])` signature-probed | The cocotb std face shipped live (single-set + ghdl spellings), not documented-only |
+| 8 | The installed orbit binary predated the Auxiliary amendment — the first re-probe showed empty stds through ALLHDL rows | Environment lesson: reinstall after every orbit-side amendment; the re-probe showed `93` riding the rows |
+| 9 | s13's case C2 grep pinned the std ORDER in the mixed-std face message — the graph walk order is not deterministic | The assertion is order-agnostic (both tokens, either order) |
+| 10 | The s12 inference face cannot run live on this box (the developer global config's 19 targets pollute the candidate set; ORBIT_HOME redirection breaks on the include walk) | s12 honest-skips loudly when polluted; the unit tests pin the tier and a fresh CI runner runs it live |
