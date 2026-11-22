@@ -30,9 +30,10 @@
 - the mdbook install caching (a future CI pass).
 - the action/runner version-bump pass.
 - the cocotb PYTHON_BIN Windows face (the loud exit-2 by design).
-- the review round's uncovered shapes (2026-11-22): a sibling
-  same-library relative-dep collision fixture (the message says "direct"
-  where "local" is promised), `Manifest::from_file` rejecting
-  `std = "banana"` through the real load path (the `EX11` fixture sits
-  orphaned in the fork's manifest.rs tests), and the elaborate/run std
-  following the top's owning project instead of the root.
+- RESOLVED 2026-11-22 (the deferred-minors round): the sibling
+  same-library relative-dep fixture (s10 case D, "local" now honest),
+  the `Manifest::from_file` std rejection through the real load path,
+  and the elaborate/run std following the top's owning library (nvc +
+  ghdl). The reviewer's custom-fileset std-bypass (M6) closed as a
+  FALSE finding empirically: custom filesets match within the
+  discovered file set, and ignored files do not ride them.

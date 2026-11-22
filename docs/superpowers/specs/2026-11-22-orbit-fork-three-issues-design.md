@@ -261,3 +261,20 @@ effect and fixed, the rest deferred:
 | ghdl prints std faces in Debug form | Minor | deferred |
 | stale exported `ORBIT_STD` leaks into std-less projects | Minor | deferred |
 | unused `verilog_only` import + orphaned `EX11` fixture | Minor | the import and one `mut` (both this campaign's warnings, the pristine-output gate) fixed; `EX11` deferred |
+
+## Deferred-minors round (2026-11-22)
+
+The review round's deferred list, worked to green on both repos
+(fork `deferred-minors` → trunk `af4d33c5`; drives `deferred-minors` →
+main `634390b`):
+
+| Finding | Action | Proof |
+|---|---|---|
+| M2 sibling same-library deps said "direct" | owner-scoped attribution: who OWNS the recorded unit decides direct vs local | s10 case D (RED witnessed: "direct dependency: sib-b" → now "local") |
+| M3 nondeterministic catalog witness | `witness_rank` (root-owned first, then library+filepath); unit test | 171→172 lib tests |
+| M4 malformed `[toolchain]` silent in list mode | the face reads BEFORE the list-mode exit; malformed = ManifestParseFailed naming the key | s11 case D (RED witnessed) |
+| M8 stale `ORBIT_STD` leak | orbit exports the var ALWAYS, empty when undeclared (drives treat empty as absent) | s13 case B `.env` grep (RED witnessed) |
+| M9 orphaned `EX11` | rides the real `from_file` load path — characterization pin (passed first: Task 7 wired the validator; the finding was a coverage gap) | manifest.rs 20 tests |
+| M5 elab/run std rode the root's | nvc + ghdl resolve the top's std from the rows analyzed into the TOP's library; ambiguous library notes and rides the run-wide face | nvc/ghdl unit tests + e2e (`tb_counter: pass` under the top-owned pin) |
+| M7 ghdl Debug-form faces | ghdl `DriveError` gains the crafted Display; three print sites leave `{e:?}` | ghdl Display test (RED witnessed) |
+| M6 custom-fileset std bypass | **closed as FALSE finding empirically**: `collect_files` matches within the discovered set (`current_files`), the planning-time check validates every discovered file, and `project.ignore`d files do not ride filesets (probed three ways: discovered, uppercase extension, ignored) | /tmp probe transcript, recorded in TODO.md |
