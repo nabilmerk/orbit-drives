@@ -918,6 +918,28 @@ fn elaborate_args(top: &str) -> Vec<String> {
 /// on both runtime failures -- so the judge reads the log; the exit
 /// stays the crash-door witness (a missing snapshot exits 1, probed,
 /// with an uppercase face the vocabulary does not carry).
+/// The batch run recipe: the snapshot runs through a tclbatch script
+/// (`run all`) instead of bare `-R`. Probed live (2026-11-22, the GRLIB
+/// zedboard corpus on this box): bare `-R` launches the kernel in gui
+/// simmode, whose IPC channel crawls the simulation ~330x on the
+/// post-reboot WSLg display path (7,842 ns in 44 s of kernel CPU);
+/// the batch mode simulates at reference speed (1 ms probed in under
+/// 5 minutes including startup). The script rides the drive's working
+/// directory, overwritten every run like the rest of the run-scoped
+/// state.
+pub const RUN_TCL_NAME: &str = "orbit-run.tcl";
+pub const RUN_TCL: &str = "run all\n";
+
+/// The run argv pieces for one top: the snapshot, the batch recipe, in
+/// that order.
+fn run_argv(top: &str) -> Vec<String> {
+    vec![
+        String::from(top),
+        String::from("-tclbatch"),
+        String::from(RUN_TCL_NAME),
+    ]
+}
+
 fn run_snapshot(
     xsim: &Path,
     top: &str,
@@ -926,8 +948,13 @@ fn run_snapshot(
     label: &str,
 ) -> Result<RunOutcome, DriveError> {
     println!("orbit-drives: vivado: {label}: running {top}");
+    std::fs::write(RUN_TCL_NAME, RUN_TCL).map_err(|e| {
+        let message = format!("cannot write the run recipe {RUN_TCL_NAME}: {e}");
+        eprintln!("orbit-drives: vivado: error: {message}");
+        DriveError::Library(message)
+    })?;
     let mut run = Command::new(xsim);
-    run.arg(top).arg("-R").args(extra);
+    run.args(run_argv(top)).args(extra);
     Recipe::from_env().apply_to(&mut run, vivado);
     let output = capture(XSIM_BIN, &mut run).map_err(DriveError::Spawn)?;
     let log = join_log(lossy(&output.stdout), lossy(&output.stderr));
@@ -1461,4 +1488,22 @@ ERROR: Please check the snapshot name which is created during 'xelab',the curren
         };
         assert!(matches!(require_part(&empty), Err(DriveError::Part)));
     }
+    #[test]
+    fn the_run_recipe_is_the_batch_mode_not_bare_r() {
+        // bare `-R` launches the kernel in gui simmode whose IPC channel
+        // crawls on the post-reboot WSLg path (probed live); the batch
+        // recipe simulates at reference speed
+        let argv = run_argv("testbench");
+        assert_eq!(
+            argv,
+            vec![
+                String::from("testbench"),
+                String::from("-tclbatch"),
+                String::from("orbit-run.tcl"),
+            ]
+        );
+        assert_eq!(RUN_TCL, "run all\n");
+        assert!(!argv.contains(&String::from("-R")), "no bare -R rides");
+    }
+
 }
