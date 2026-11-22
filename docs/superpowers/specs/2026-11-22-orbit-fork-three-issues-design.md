@@ -344,3 +344,34 @@ The zedboard corpus's ghdl path, probed to its full shape:
   the row's extension; probed live on cocotb 2.1.0: the shipped
   targets' rows now carry instead of the exit-2 refusal).
 - Upstream PRs opened: #26 (issue #23). #25/#24 in flight.
+
+## The zedboard simulation campaign (2026-11-22, night)
+
+The goal: run the GRLIB leon3 zedboard systest through the corrected
+stack. Outcome: the stack's vivado path is healthy through compile +
+elaborate + launch, but the simulation itself stalls at 7,842 ns of
+simulated time (the CPU's jump from the boot PROM into the
+ram.srec-loaded RAM at 0x40000000) in EVERY configuration tested:
+
+| Configuration | Result |
+|---|---|
+| ALLHDL 411-file, gui `-R`, no srecs staged | crawl at 7,842 ns (CPU spin, gui-IPC + uninitialized-RAM mixture) |
+| closure 112-file, batch `--t`, srecs staged | fast-forward to 10 ms simulated in 0.03 s CPU — the design IDLES at 7,842 ns (stalled CPU, no events past the handoff) |
+| upstream orbit + pre-campaign drives + pre-campaign manifest (the exact Nov 8 reference configuration) | ALSO fails to complete (20-min bound, still in the run phase) |
+
+Probed and fixed along the way: the locale (`rdiArgs.sh` forces
+`en_US.UTF-8`; generated today — launches were warn-and-run in the
+afternoon, hard-abort by evening, cause of the flip unidentified), the
+SuSE ncurses leg ordering under `settings64.sh` (the script clobbers
+`LD_LIBRARY_PATH`), and the vivado drive's run recipe (batch mode now
+fast-forwards idle time instead of burning CPU in the gui channel —
+`85c5b4f`).
+
+The remaining delta: the Nov 8 reference reached 940,860 ns in 16 s
+with a 1389 MB design on this same directory, and its exact inputs
+are unrecoverable (the era's blueprint, xsim.dir, and kernel log were
+overwritten by later runs). The stall reproduces on the UNMODIFIED
+upstream stack, so it is not the campaign's regression. The open
+question for the owner: how was the Nov 8 vivado run invoked (shell,
+env, srec generation state) — the answer names the missing
+ingredient.
