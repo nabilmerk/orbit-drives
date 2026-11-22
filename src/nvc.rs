@@ -86,6 +86,36 @@ fn std_flag_from(value: Option<&str>) -> String {
     }
 }
 
+/// The every-spawn flags face (`ORBIT_DRIVES_NVC_FLAGS`): the value is
+/// whitespace-split and rides every spawn's global block, right after
+/// the std flag -- the same shape as ghdl's
+/// [`ORBIT_DRIVES_GHDL_FLAGS`][crate::ghdl::FLAGS_ENV] (ghdl re-checks
+/// flag consistency at every LOAD of an analyzed unit, so a corpus's
+/// recipe must ride uniformly; nvc's analysis set is one library state
+/// for the same reason). Unset or empty: nothing rides.
+///
+/// WHY the drive carries this face: vendor-library corpora pin their
+/// own recipe -- the Xilinx unisim class compiles cleanest under
+/// nvc's `--relaxed` (disable certain pedantic rule checks; the flag's
+/// existence probed on nvc 1.23.1, 2026-11-22) -- and a recipe is a
+/// CORPUS fact nothing else in the stack expresses. The GRLIB zedboard
+/// corpus needed no nvc flags (523/523 analyzed clean at the
+/// drive's `--std=2008` pin, probed 2026-11-22).
+pub const FLAGS_ENV: &str = "ORBIT_DRIVES_NVC_FLAGS";
+
+/// The resolver behind [`extra_flags`], pure so the tests can pin the
+/// split without touching the process env.
+fn flags_from(value: Option<&str>) -> Vec<String> {
+    match value {
+        Some(v) => v.split_whitespace().map(str::to_string).collect(),
+        None => Vec::new(),
+    }
+}
+
+fn extra_flags() -> Vec<String> {
+    flags_from(std::env::var(FLAGS_ENV).ok().as_deref())
+}
+
 /// The `--std=` flag every spawn leads with: the env override when set,
 /// the pinned default otherwise.
 fn std_arg() -> String {
@@ -682,6 +712,9 @@ fn analyze_once(file: &Path, library: &str, std_flag: &str) -> Result<(), String
 /// [`top_library`].
 fn global_args(library: &str, std_flag: &str) -> Vec<String> {
     let mut args = vec![String::from(std_flag)];
+    // the corpus recipe rides uniformly: global options before the
+    // command, the same every-spawn shape ghdl's flags face splices
+    args.extend(extra_flags());
     args.extend(SEARCH_PATH_ARGS.iter().map(|arg| arg.to_string()));
     args.push(format!("--work={library}"));
     args.extend(heap_args());
@@ -1147,6 +1180,22 @@ mod tests {
             top_std_flag("root", &carried).unwrap(),
             run_std_flag().unwrap_or_else(|_| std_arg())
         );
+    }
+
+    #[test]
+    fn the_flags_face_splits_and_stays_empty_when_unset() {
+        // whitespace-split, verbatim tokens
+        assert_eq!(
+            flags_from(Some("--relaxed -H 2G")),
+            vec![
+                String::from("--relaxed"),
+                String::from("-H"),
+                String::from("2G")
+            ]
+        );
+        // unset or blank: nothing rides
+        assert_eq!(flags_from(None), Vec::<String>::new());
+        assert_eq!(flags_from(Some("   ")), Vec::<String>::new());
     }
 
     #[test]
