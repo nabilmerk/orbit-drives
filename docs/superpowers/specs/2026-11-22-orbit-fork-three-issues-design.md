@@ -278,3 +278,46 @@ main `634390b`):
 | M5 elab/run std rode the root's | nvc + ghdl resolve the top's std from the rows analyzed into the TOP's library; ambiguous library notes and rides the run-wide face | nvc/ghdl unit tests + e2e (`tb_counter: pass` under the top-owned pin) |
 | M7 ghdl Debug-form faces | ghdl `DriveError` gains the crafted Display; three print sites leave `{e:?}` | ghdl Display test (RED witnessed) |
 | M6 custom-fileset std bypass | **closed as FALSE finding empirically**: `collect_files` matches within the discovered set (`current_files`), the planning-time check validates every discovered file, and `project.ignore`d files do not ride filesets (probed three ways: discovered, uppercase extension, ignored) | /tmp probe transcript, recorded in TODO.md |
+
+## The corpus round (2026-11-22, afternoon): flags probed, a proposal
+
+The zedboard GRLIB corpus run exposed two more faces, probed to their
+roots:
+
+| # | Verdict (evidence) | Amendment |
+|---|---|---|
+| 11 | The blueprint carried 112 duplicate paths (fileset rows + closure rows); ghdl re-stamps a file's library entry on re-analysis, obsoleting every dependent (`package "amba" is obsoleted by package "config"`, 287 files starved) | Fixed: closure rows whose path already rode a fileset row are skipped (50b9022b, s13 case A3) — the probed REPLACE semantics now actually hold |
+| 12 | With duplicates gone, 215 files still starved: the `_tp` test packages' `2**(gAWidth-2)` bounds are strict-93-illegal; at `--std=08` the stdlib's HRead homograph walls — but at ghdl's DEFAULT std both compile clean | Fixed: ghdl's "93" maps to NO flag (the default rides); the explicit `--std=93` pin was the wall (probed binary: default clean / explicit pinned, identical flags) — the 2026-11-08 un-pinning ruling, now proven for the declared face |
+| 13 | GRLIB's own recipe is `bin/Makefile:492`: `-fexplicit --ieee=synopsys --mb-comments --warn-no-binding --warn-no-hide -O2` at the default std; run opts `--assert-level=error --ieee-asserts=disable`; nvc's unisim counterpart is `--relaxed` | The recipe rides the existing `ORBIT_DRIVES_GHDL_FLAGS` env face; corpus rerun in flight |
+
+### The proposal: where corpus flags live (user decides)
+
+Facts that shape it: flags are per-TOOL, per-CORPUS facts (the same ghdl
+target serves corpora with different recipes; ghdl enforces flag
+consistency across every spawn of one analysis set); the drives already
+carry the every-spawn splice positions (`ORBIT_DRIVES_GHDL_FLAGS` for
+ghdl; nvc grows the same handling for `--relaxed` and friends).
+
+- **Option A — config `[env]`, no code**: the recipe is pinned per user
+  or host through orbit's existing config env face
+  (`orbit config --push env.ORBIT_DRIVES_GHDL_FLAGS="--fexplicit
+  --ieee=synopsys --mb-comments"`); nvc gains the symmetric
+  `ORBIT_DRIVES_NVC_FLAGS` splice (small drives change); the book
+  documents the GRLIB and unisim recipes.
+- **Option B — target-level `flags`**: orbit's Target schema gains
+  `flags: Option<String>` (fork change), exported to the selected
+  drive's spawn as `ORBIT_TARGET_FLAGS`; drives splice it at their
+  every-spawn position. Flags live next to the command on the target —
+  the tool-shaped axis — set by whoever owns the target definition
+  (an overlay fragment or the shipped package). Wrinkle: the shipped
+  14 targets can't be overridden key-wise by a later include (config
+  merge is first-wins by name), so corpus owners would pin via their
+  own config copies or keep the env face.
+- **Option C — manifest `[toolchain]` extension** (`flags = "..."`):
+  in-repo per-project flags exported as `ORBIT_TARGET_FLAGS`. Wrong
+  axis: a project mixing ghdl and nvc targets with different recipes
+  cannot express both under one string.
+
+Recommendation: **A now, B as the durable face if a ruling wants
+recipe-carrying targets** — A needs only the nvc splice + docs; B is a
+schema change whose override wrinkle needs its own answer first.
