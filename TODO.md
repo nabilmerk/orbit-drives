@@ -30,3 +30,9 @@
 - the mdbook install caching (a future CI pass).
 - the action/runner version-bump pass.
 - the cocotb PYTHON_BIN Windows face (the loud exit-2 by design).
+- the review round's uncovered shapes (2026-11-22): a sibling
+  same-library relative-dep collision fixture (the message says "direct"
+  where "local" is promised), `Manifest::from_file` rejecting
+  `std = "banana"` through the real load path (the `EX11` fixture sits
+  orphaned in the fork's manifest.rs tests), and the elaborate/run std
+  following the top's owning project instead of the root.
