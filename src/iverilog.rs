@@ -64,7 +64,6 @@ pub const GEN: &str = "-g2012";
 /// carry refuses loudly. Nothing declared: the pinned `-g2012` default.
 fn resolved_gen(carried: &[Entry]) -> Result<Vec<String>, DriveError> {
     let mut gen: Option<Vec<String>> = None;
-    let mut seen: Option<String> = None;
     for entry in carried {
         if let Some(token) = crate::stdmap::row_std(entry.std.as_deref()) {
             let is_sv = matches!(
@@ -75,17 +74,18 @@ fn resolved_gen(carried: &[Entry]) -> Result<Vec<String>, DriveError> {
                 .ok_or(DriveError::StdUnsupported {
                     token: token.clone(),
                 })?;
-            match &seen {
-                None => {
-                    seen = Some(token);
-                    gen = Some(flag);
-                }
-                Some(prev) if prev == &token => {}
+            match &gen {
+                None => gen = Some(flag),
+                Some(prev) if prev == &flag => {}
                 Some(prev) => {
+                    // compare the RESOLVED selectors, not the tokens: the
+                    // same token can spell two selectors across languages
+                    // (-g2005 vs -g2005-sv), and which row came first must
+                    // not pick the compile's language mode
                     return Err(DriveError::MixedStd {
-                        first: prev.clone(),
-                        second: token,
-                    })
+                        first: prev.join(" "),
+                        second: flag.join(" "),
+                    });
                 }
             }
         }
@@ -250,9 +250,9 @@ impl fmt::Display for DriveError {
             ),
             DriveError::MixedStd { first, second } => write!(
                 f,
-                "the graph declares differing stds ({first}, {second}) -- iverilog \
-                 compiles one analysis set under one -g selector; declare \
-                 mixed-std-compatible targets or align the projects' std fields"
+                "the graph's rows resolve to differing std selectors ({first} vs \
+                 {second}) -- iverilog compiles one analysis set under one -g \
+                 selector; align the projects' std fields"
             ),
             DriveError::Compile { .. } => write!(f, "the iverilog compile failed"),
             DriveError::Findings(findings) => {
@@ -626,6 +626,26 @@ tb_warn.v:6: $finish called at 1 (1s)
         assert!(matches!(
             resolved_gen(&carried),
             Err(DriveError::StdUnsupported { .. })
+        ));
+        // the same token in both languages resolves to DIFFERENT
+        // selectors (-g2005 vs -g2005-sv): order-independent refusal
+        let carried = crate::blueprint::verilog_entries(
+            &parse_blueprint("VLOG\twork\t./a.v\t2005\nSYSV\twork\t./b.sv\t2005\n")
+                .unwrap(),
+        )
+        .unwrap();
+        assert!(matches!(
+            resolved_gen(&carried),
+            Err(DriveError::MixedStd { .. })
+        ));
+        let carried = crate::blueprint::verilog_entries(
+            &parse_blueprint("SYSV\twork\t./b.sv\t2005\nVLOG\twork\t./a.v\t2005\n")
+                .unwrap(),
+        )
+        .unwrap();
+        assert!(matches!(
+            resolved_gen(&carried),
+            Err(DriveError::MixedStd { .. })
         ));
     }
 

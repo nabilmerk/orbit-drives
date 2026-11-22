@@ -241,3 +241,23 @@ family style.
 | 8 | The installed orbit binary predated the Auxiliary amendment — the first re-probe showed empty stds through ALLHDL rows | Environment lesson: reinstall after every orbit-side amendment; the re-probe showed `93` riding the rows |
 | 9 | s13's case C2 grep pinned the std ORDER in the mixed-std face message — the graph walk order is not deterministic | The assertion is order-agnostic (both tokens, either order) |
 | 10 | The s12 inference face cannot run live on this box (the developer global config's 19 targets pollute the candidate set; ORBIT_HOME redirection breaks on the include walk) | s12 honest-skips loudly when polluted; the unit tests pin the tier and a fresh CI runner runs it live |
+
+## Final review (fresh Opus reviewer, 2026-11-22) and fix pass
+
+Verdict: no Critical; all five review-focus guarantees hold. Two
+Important findings fixed RED→GREEN, one Minor regraded Important by
+effect and fixed, the rest deferred:
+
+| Finding | Grade | Action |
+|---|---|---|
+| quartus-build's single-set check refused legal cross-language std graphs (vhdl 93 + verilog 2001) | Important | fixed: per-language grouping — only a same-language disagreement refuses; RED→GREEN |
+| stdmap's env-mutating test raced the drives' default-path tests on a false safety comment | Important | fixed: pure `resolve_std(entry_std, env_std)` split, no env mutation in tests; RED→GREEN |
+| `.v 2005` + `.sv 2005` compiled under whichever selector came first (order-dependent results) | Minor → regraded Important by effect | fixed: iverilog/verilator compare RESOLVED selectors, not tokens; RED→GREEN |
+| sibling same-library relative deps report "direct" where "local" is promised (message misattribution, refusal correct) | Minor | deferred |
+| catalog-branch dupe witness pick nondeterministic when a name coexists in 2+ libraries (message-only) | Minor | deferred |
+| malformed `[toolchain]` silently drops the tier in list mode (build/test fail loudly) | Minor | deferred |
+| elaborate/run std rides the root's std, not the top's owning project's | Minor | deferred |
+| custom-fileset rows bypass the planning-time vocabulary check (loud later at the drive) | Minor | deferred |
+| ghdl prints std faces in Debug form | Minor | deferred |
+| stale exported `ORBIT_STD` leaks into std-less projects | Minor | deferred |
+| unused `verilog_only` import + orphaned `EX11` fixture | Minor | the import and one `mut` (both this campaign's warnings, the pristine-output gate) fixed; `EX11` deferred |

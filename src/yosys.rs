@@ -33,7 +33,7 @@ use std::path::Path;
 use std::path::PathBuf;
 use std::process::Command;
 
-use crate::blueprint::{parse_blueprint, plan_note, verilog_only, BlueprintError, Drive};
+use crate::blueprint::{parse_blueprint, plan_note, BlueprintError, Drive};
 use crate::contracts::{self, Tool};
 use crate::iverilog::NotCarried;
 use crate::proc::{capture, eprint_block, join_log, lossy};

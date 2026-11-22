@@ -98,25 +98,40 @@ fn row_std_flag(entry_std: Option<&str>) -> Result<String, DriveError> {
 
 /// The single-set check for the build face: quartus_map reads one
 /// project set through the generated .qsf, and its flow carries no
-/// std selector in v1 -- differing declared stds refuse; one declared
-/// std names itself in a note, never silently dropped.
+/// std selector in v1. The stds are checked PER LANGUAGE: each language
+/// owns its std space, so a VHDL project pinning 93 beside a Verilog
+/// project pinning 2001 is two independent declarations, not a mix --
+/// only a same-language disagreement refuses. Any declared std names
+/// itself in a note, never silently dropped.
 fn check_single_set(carried: &[crate::blueprint::Entry]) -> Result<(), DriveError> {
-    let mut seen: Option<String> = None;
-    for entry in carried {
-        if let Some(token) = crate::stdmap::row_std(entry.std.as_deref()) {
-            match &seen {
-                None => seen = Some(token),
-                Some(prev) if prev == &token => {}
-                Some(prev) => {
-                    return Err(DriveError::MixedStd {
-                        first: prev.clone(),
-                        second: token,
-                    })
+    let check = |is_vhdl_rows: bool| -> Result<Option<String>, DriveError> {
+        let mut seen: Option<String> = None;
+        for entry in carried {
+            let is_vhdl_row = matches!(
+                entry.path.extension().and_then(|ext| ext.to_str()),
+                Some("vhd") | Some("vhdl")
+            );
+            if is_vhdl_row != is_vhdl_rows {
+                continue;
+            }
+            if let Some(token) = crate::stdmap::row_std(entry.std.as_deref()) {
+                match &seen {
+                    None => seen = Some(token),
+                    Some(prev) if prev == &token => {}
+                    Some(prev) => {
+                        return Err(DriveError::MixedStd {
+                            first: prev.clone(),
+                            second: token,
+                        })
+                    }
                 }
             }
         }
-    }
-    if let Some(token) = &seen {
+        Ok(seen)
+    };
+    let vhdl_std = check(true)?;
+    let verilog_std = check(false)?;
+    for token in [vhdl_std, verilog_std].into_iter().flatten() {
         eprintln!(
             "orbit-drives: quartus: note: the graph declares std {token}, but the \
              quartus_map synthesis flow carries no std selector in v1 -- riding \
@@ -1018,6 +1033,26 @@ sim done
             Err(DriveError::StdUnsupported { .. })
         ));
         // the build face's single-set check refuses mixed graphs
+        let carried = crate::blueprint::parse_blueprint(
+            "VHDL\twork\t./a.vhd\t93\nVHDL\twork\t./b.vhd\t2008\n",
+        )
+        .unwrap();
+        assert!(matches!(
+            check_single_set(&carried),
+            Err(DriveError::MixedStd { .. })
+        ));
+    }
+
+    #[test]
+    fn the_build_face_refuses_same_language_mixes_but_not_per_language_stds() {
+        // a legal cross-language graph: each language pins its own std --
+        // nothing is mixed, the build face must not refuse it
+        let carried = crate::blueprint::parse_blueprint(
+            "VHDL\twork\t./a.vhd\t93\nVLOG\twork\t./b.v\t2001\n",
+        )
+        .unwrap();
+        assert!(check_single_set(&carried).is_ok());
+        // a same-language mix is still the loud refusal
         let carried = crate::blueprint::parse_blueprint(
             "VHDL\twork\t./a.vhd\t93\nVHDL\twork\t./b.vhd\t2008\n",
         )

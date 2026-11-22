@@ -57,7 +57,6 @@ pub const TIMING: &str = "--timing";
 /// language pair rides (verilator's own default, the v1 honest limit).
 fn resolved_language(carried: &[Entry]) -> Result<Vec<String>, DriveError> {
     let mut language: Option<Vec<String>> = None;
-    let mut seen: Option<String> = None;
     for entry in carried {
         if let Some(token) = crate::stdmap::row_std(entry.std.as_deref()) {
             let is_sv = matches!(
@@ -69,17 +68,18 @@ fn resolved_language(carried: &[Entry]) -> Result<Vec<String>, DriveError> {
                     .ok_or(DriveError::StdUnsupported {
                         token: token.clone(),
                     })?;
-            match &seen {
-                None => {
-                    seen = Some(token);
-                    language = Some(flag);
-                }
-                Some(prev) if prev == &token => {}
+            match &language {
+                None => language = Some(flag),
+                Some(prev) if prev == &flag => {}
                 Some(prev) => {
+                    // compare the RESOLVED selectors, not the tokens: the
+                    // same token can spell two language modes across
+                    // languages (1364-2005 vs 1800-2005), and which row
+                    // came first must not pick the lint/build's mode
                     return Err(DriveError::MixedStd {
-                        first: prev.clone(),
-                        second: token,
-                    })
+                        first: prev.join(" "),
+                        second: flag.join(" "),
+                    });
                 }
             }
         }
@@ -218,9 +218,9 @@ impl fmt::Display for DriveError {
             ),
             DriveError::MixedStd { first, second } => write!(
                 f,
-                "the graph declares differing stds ({first}, {second}) -- verilator \
-                 lints and builds one analysis set under one --language selector; \
-                 align the projects' std fields or ride the tool default"
+                "the graph's rows resolve to differing std selectors ({first} vs \
+                 {second}) -- verilator lints and builds one analysis set under \
+                 one --language selector; align the projects' std fields"
             ),
             DriveError::Lint { .. } => write!(f, "the verilator lint failed"),
             DriveError::Build { top, .. } => write!(f, "the verilator build failed for {top}"),
@@ -695,6 +695,24 @@ all quiet
             resolved_language(&carried),
             Err(DriveError::StdUnsupported { .. })
         ));
+    }
+
+    #[test]
+    fn the_same_token_across_languages_refuses_order_independently() {
+        use crate::blueprint::parse_blueprint;
+        // 2005 spells two language modes (1364-2005 vs 1800-2005): the
+        // refusal must not depend on which row came first
+        for text in [
+            "VLOG\twork\t./a.v\t2005\nSYSV\twork\t./b.sv\t2005\n",
+            "SYSV\twork\t./b.sv\t2005\nVLOG\twork\t./a.v\t2005\n",
+        ] {
+            let carried = crate::blueprint::verilog_entries(&parse_blueprint(text).unwrap())
+                .unwrap();
+            assert!(matches!(
+                resolved_language(&carried),
+                Err(DriveError::MixedStd { .. })
+            ));
+        }
     }
 
     #[test]

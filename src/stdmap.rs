@@ -86,16 +86,30 @@ pub fn verilog_flag(tool: Tool, token: &str, is_sv: bool) -> Option<Vec<String>>
 /// wins; a row without one inherits the run-wide `ORBIT_STD` face.
 /// `None` = nothing declares a std anywhere — the drive rides its
 /// tool's default or its own interim pin.
+///
+/// The pure core is [`resolve_std`]; this wrapper only reads the
+/// process env, so the tests never mutate shared state (a parallel
+/// test reading `ORBIT_STD` would race a mutation — the default-path
+/// tests of the single-set drives do exactly that).
 pub fn row_std(entry_std: Option<&str>) -> Option<String> {
+    resolve_std(
+        entry_std,
+        std::env::var("ORBIT_STD").ok().as_deref(),
+    )
+}
+
+/// The pure resolver behind [`row_std`], injectable so the tests pin
+/// both tiers without touching the process env.
+pub fn resolve_std(entry_std: Option<&str>, env_std: Option<&str>) -> Option<String> {
     entry_std
         .map(str::trim)
         .filter(|token| !token.is_empty())
         .map(String::from)
         .or_else(|| {
-            std::env::var("ORBIT_STD")
-                .ok()
-                .map(|value| value.trim().to_string())
+            env_std
+                .map(str::trim)
                 .filter(|value| !value.is_empty())
+                .map(String::from)
         })
 }
 
@@ -180,25 +194,17 @@ mod tests {
 
     #[test]
     fn the_row_std_prefers_the_row_and_falls_to_the_env() {
-        // the row wins
+        // the row wins over the env face
         assert_eq!(
-            row_std(Some("2008")),
+            resolve_std(Some("2008"), Some("93")),
             Some(String::from("2008"))
         );
-        // blank row fields count as absent
-        assert_eq!(row_std(Some("  ")), None);
-        assert_eq!(row_std(Some("")), None);
-        assert_eq!(row_std(None), None);
-    }
-
-    #[test]
-    fn the_env_face_is_inherited_by_stdless_rows() {
-        // set by the tests' own harness; not parallel, no other test
-        // reads ORBIT_STD
-        std::env::set_var("ORBIT_STD", "93");
-        assert_eq!(row_std(None), Some(String::from("93")));
-        assert_eq!(row_std(Some("2008")), Some(String::from("2008")));
-        std::env::remove_var("ORBIT_STD");
-        assert_eq!(row_std(None), None);
+        // blank row fields count as absent and fall to the env face
+        assert_eq!(resolve_std(Some("  "), Some("93")), Some(String::from("93")));
+        assert_eq!(resolve_std(Some(""), Some("93")), Some(String::from("93")));
+        assert_eq!(resolve_std(None, Some("93")), Some(String::from("93")));
+        // a blank env face counts as absent too
+        assert_eq!(resolve_std(None, Some("  ")), None);
+        assert_eq!(resolve_std(None, None), None);
     }
 }
