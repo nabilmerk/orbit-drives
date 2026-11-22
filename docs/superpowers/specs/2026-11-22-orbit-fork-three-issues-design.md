@@ -321,3 +321,26 @@ ghdl; nvc grows the same handling for `--relaxed` and friends).
 Recommendation: **A now, B as the durable face if a ruling wants
 recipe-carrying targets** — A needs only the nvc splice + docs; B is a
 schema change whose override wrinkle needs its own answer first.
+
+## The corpus round continues (2026-11-22, evening): unisim, marker, routing
+
+The zedboard corpus's ghdl path, probed to its full shape:
+
+- Provisioned `unisim/` into the demo tree (library `unisim`, the
+  VCOMPONENTS declarations only — GRLIB's own ghdl flow provisions
+  declarations, not the 197 primitives; the stub's memories are its own
+  tbmem models). The techmap wrappers, however, instantiate primitive
+  ENTITIES — their recipe is `--std=08 -fsynopsys -frelaxed`, and this
+  Vivado lacks `vital2000`, so the wrappers stay unplannable here; the
+  completion path (vital2000 from ghdl-src, or the xsim precompiled
+  flow) is parked in TODO.md.
+- orbit's symbol parser rejects multi-dimensional array type
+  constraints — `unisim_VPKG.vhd` is unplannable ("invalid syntax").
+  Upstream-class finding, parked for the issue queue.
+- The pass-marker face shipped (`ORBIT_DRIVES_PASS_MARKER`, all six sim
+  faces; the three-arm live proof: control convicts, marker overrides,
+  absent-marker leaves the standard rule).
+- The ALLHDL routing fix shipped (cocotb + quartus sim faces route by
+  the row's extension; probed live on cocotb 2.1.0: the shipped
+  targets' rows now carry instead of the exit-2 refusal).
+- Upstream PRs opened: #26 (issue #23). #25/#24 in flight.
