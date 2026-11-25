@@ -508,6 +508,13 @@ The ghdl loader window-clear hang (parked against ghdl-LLVM/mcode,
 systest ran clean through every subtest. The upstream probe remains
 open for older ghdl.
 
+The provisioning rode a hand-set `GHDL_PREFIX` that day; it ships as a
+face now -- `ORBIT_DRIVES_GHDL_VENDOR_PREFIX` (orbit-drives
+`vendor-minors`, 2026-11-25): the drive detects referenced-but-uncarried
+libraries from the blueprint alone, wires the prefix on every spawn, and
+exit-2s with a hint when nothing is provisioned. The manual mirror above
+is the same layout the face consumes.
+
 A second orbit fix landed in service of the ghdl check: the plan
 closure now rides whole files (`expand_order_to_file_closure`,
 trunk c2e226c7) -- a planned file carries the dependencies of every

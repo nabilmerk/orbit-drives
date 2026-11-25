@@ -38,7 +38,10 @@
   recipe lives in the campaign record (ghdl's vendors script over the
   merged ISE+modern source tree at `<demo>/ghdl-unisim-src`, cf
   consumed through the `GHDL_PREFIX` mirror at `<demo>/ghdl-prefix`);
-  the zedboard ghdl face passes end-to-end.
+  the zedboard ghdl face passes end-to-end. The manual env shipped as
+  the `ORBIT_DRIVES_GHDL_VENDOR_PREFIX` face (2026-11-25): the drive
+  detects the external libraries from the blueprint and wires the
+  prefix itself, exit-2 with a hint when unprovisioned.
 - orbit's symbol parser rejects multi-dimensional array type
   constraints (`array (integer range <>, integer range <>) of ...`,
   VHDL-2008) — the vendor `unisim_VPKG.vhd` is unplannable
