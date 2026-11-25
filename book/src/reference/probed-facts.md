@@ -174,3 +174,13 @@ so it never judges a clean run. The faces are cocotb's OWN aggregates:
 the backing simulator's lowercase ghdl faces belong to the ghdl
 vocabulary, never this one.
 
+
+- ghdl 6's library loader searches `<prefix>/<lib>/v93/<lib>-obj<STD>.cf`
+  for every referenced library, with `GHDL_PREFIX` replacing the whole
+  prefix (ghdl's own `std`/`ieee`/runtime files must ride beside the
+  vendor libraries); `-P` is not an `ghdl -a` option in this edition
+  (probed live 2026-11-25, ghdl 6.0.0 Dunoon).
+- The ISE-era unisim primitives (`RAMB16_S36_S36`, `DCM`, `DSP48`, the
+  old pads) survive only in Vivado's `ids_lite/ISE/vhdl/src/unisims`
+  tree in 2025.2 -- the modern tree dropped them along with the old
+  `unisim_VCOMPONENTS` that declared them (probed live 2026-11-25).

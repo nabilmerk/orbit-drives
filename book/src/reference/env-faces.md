@@ -11,6 +11,7 @@ stack expresses. All are unset-by-default; all ride verbatim.
 | `ORBIT_DRIVES_NVC_HEAP` | `-H <size>` on every nvc spawn | nvc's default heap |
 | `ORBIT_DRIVES_GHDL_FLAGS` | whitespace-split flags on every ghdl spawn | none |
 | `ORBIT_DRIVES_GHDL_ASSERT_LEVEL` | `--assert-level=<value>` in the run argv | `error` |
+| `ORBIT_DRIVES_GHDL_VENDOR_PREFIX` | sets `GHDL_PREFIX` on every ghdl spawn so a referenced vendor library (`unisim`, `unisim_retarget`, ...) resolves from a precompiled prefix; when the blueprint references external libraries and neither this face nor `GHDL_PREFIX` is set, the drive exits 2 with the hint | unset |
 | `ORBIT_PROJECT_LIBRARY` | set by orbit; the drive reads it | — |
 
 ## The probed provenance
@@ -47,3 +48,22 @@ stack expresses. All are unset-by-default; all ride verbatim.
 - `ORBIT_DRIVES_GHDL_ASSERT_LEVEL`: the level-error pin halted the
   zedboard sim at 0 ms on the AHB-to-AXI bridge's tolerated init note
   (probed 2026-11-09); ghdl's duplicate-option precedence is last-wins.
+
+
+### Provisioning a vendor library for ghdl
+
+A design that reaches into `unisim` needs the library compiled once per
+machine -- ghdl ships the flow
+(`scripts/vendors/compile-xilinx-vivado.sh --unisim --vhdl93` over the
+Vivado installation's `data/vhdl/src/unisims` tree; the GRLIB-class
+wrappers also reach the ISE-era primitives Vivado's modern tree dropped,
+so the source tree merges the modern files with the ISE set from
+`ids_lite/ISE/vhdl/src/unisims`). The compile lands as
+`<output>/unisim/v93/unisim-obj93.cf`; ghdl 6's loader searches
+`<prefix>/<lib>/v93/<lib>-obj<STD>.cf`, so the output dir rides
+`ORBIT_DRIVES_GHDL_VENDOR_PREFIX` verbatim when its layout matches
+(`<prefix>/unisim/v93/unisim-obj93.cf`, with ghdl's own `std`/`ieee` and
+runtime files symlinked beside it when the prefix replaces ghdl's
+default). The `--vhdl93` standard matters: the design rows analyze at
+ghdl's 93 default, and a same-std library file avoids the cross-std
+suffix mismatch.
