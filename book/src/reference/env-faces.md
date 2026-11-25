@@ -7,7 +7,7 @@ stack expresses. All are unset-by-default; all ride verbatim.
 |---|---|---|
 | `ORBIT_STD` | set by orbit (the fork's #24 face): the working project's declared std; inherited by every std-less blueprint row in every drive | — |
 | `ORBIT_DRIVES_NVC_STD` | `--std=<value>` on every nvc spawn (below the row std and `ORBIT_STD`) | nvc's own default |
-| `ORBIT_DRIVES_NVC_FLAGS` | whitespace-split flags in every nvc spawn's global block, right after the std flag (the fork's option-A face, 2026-11-22) | nothing |
+| `ORBIT_DRIVES_NVC_FLAGS` | whitespace-split flags in every nvc analyze spawn's command block, after `-a` (the corpus recipe's `--relaxed` is command-scope in nvc 1.23; probed 2026-11-25) | nothing |
 | `ORBIT_DRIVES_NVC_HEAP` | `-H <size>` on every nvc spawn | nvc's default heap |
 | `ORBIT_DRIVES_GHDL_FLAGS` | whitespace-split flags on every ghdl spawn | none |
 | `ORBIT_DRIVES_GHDL_ASSERT_LEVEL` | `--assert-level=<value>` in the run argv | `error` |

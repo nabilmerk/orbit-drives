@@ -102,6 +102,8 @@ fn std_flag_from(value: Option<&str>) -> String {
 /// corpus needed no nvc flags (523/523 analyzed clean at the
 /// drive's `--std=2008` pin, probed 2026-11-22).
 pub const FLAGS_ENV: &str = "ORBIT_DRIVES_NVC_FLAGS";
+/// (the flags splice rides the ANALYZE command block -- the corpus
+/// recipe's entries are command-scope in nvc 1.23, probed 2026-11-25)
 
 /// The resolver behind [`extra_flags`], pure so the tests can pin the
 /// split without touching the process env.
@@ -693,7 +695,9 @@ fn run_top(
 /// declares.
 fn analyze_once(file: &Path, library: &str, std_flag: &str) -> Result<(), String> {
     let mut command = Command::new(NVC_BIN);
-    command.args(global_args(library, std_flag)).arg("-a").arg(file);
+    command
+        .args(analyze_args(library, std_flag, &extra_flags()))
+        .arg(file);
     match capture(NVC_BIN, &mut command) {
         Ok(output) if output.status.success() => Ok(()),
         Ok(output) => Err(lossy(&output.stderr)),
@@ -715,12 +719,23 @@ fn analyze_once(file: &Path, library: &str, std_flag: &str) -> Result<(), String
 /// [`top_library`].
 fn global_args(library: &str, std_flag: &str) -> Vec<String> {
     let mut args = vec![String::from(std_flag)];
-    // the corpus recipe rides uniformly: global options before the
-    // command, the same every-spawn shape ghdl's flags face splices
-    args.extend(extra_flags());
     args.extend(SEARCH_PATH_ARGS.iter().map(|arg| arg.to_string()));
     args.push(format!("--work={library}"));
     args.extend(heap_args());
+    args
+}
+
+/// The analyze argv builder: the global block leads (nvc's argv is
+/// option-first -- global options after the command are rejected, probed),
+/// then the `-a` command, then the corpus recipe's flags. The flags ride
+/// the COMMAND block because the corpus recipe's entries are
+/// command-scope (`--relaxed`: global rejected, probed 2026-11-25); the
+/// global-scope knobs own their own faces (`ORBIT_DRIVES_NVC_HEAP`,
+/// `ORBIT_DRIVES_NVC_STD`).
+fn analyze_args(library: &str, std_flag: &str, extra: &[String]) -> Vec<String> {
+    let mut args = global_args(library, std_flag);
+    args.push(String::from("-a"));
+    args.extend(extra.iter().cloned());
     args
 }
 
@@ -970,6 +985,18 @@ mod tests {
         // §25 ruling); the drive never normalizes it to nvc's default.
         assert_eq!(global_args("work", "--std=2008")[3], "--work=work");
         assert_eq!(global_args("MyLib", "--std=2008")[3], "--work=MyLib");
+
+    #[test]
+    fn analyze_flags_ride_the_command_block() {
+        // nvc's --relaxed is command-scope (global rejected: `unrecognised
+        // global option --relaxed`, probed 2026-11-25) -- the face's flags
+        // splice after the `-a` command, never in the global lead
+        let args = analyze_args("unisim", "", &["--relaxed".to_string()]);
+        let a_pos = args.iter().position(|a| a == "-a").unwrap();
+        let relaxed_pos = args.iter().position(|a| a == "--relaxed").unwrap();
+        assert!(relaxed_pos > a_pos);
+        assert!(args.contains(&"--work=unisim".to_string()));
+    }
     }
 
     #[test]
