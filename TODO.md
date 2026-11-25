@@ -59,9 +59,11 @@
   (the stub backdoor-loads it from the run cwd). Two primitives absent
   from this Vivado's ISE tree (`ODDRC3E`, `ODDRV2`) are harmless: the
   ddr wrappers referencing them analyze unbound and never elaborate
-  for this design. vivado's corpus compile runs at reference speed on
-  the batch recipe; its wall clock exceeds an interactive timeout, run
-  it in the background.
+  for this design. vivado's corpus run VERIFIED: 466 files compiled in
+  6 deferral passes, the systest passed at the reference figure -- wall
+  clock ~23 minutes (the per-file xvhdl spawns dominate; the sim
+  itself is reference-speed on the batch recipe). Run it in the
+  background; stage the target dir's `ram.srec` first.
 - orbit's symbol parser rejects multi-dimensional array type
   constraints (`array (integer range <>, integer range <>) of ...`,
   VHDL-2008) — the vendor `unisim_VPKG.vhd` is unplannable
