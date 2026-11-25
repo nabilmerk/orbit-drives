@@ -45,20 +45,30 @@ pub fn external_libraries(entries: &[Entry]) -> Vec<String> {
             };
             let tokens: Vec<&str> = code.split_whitespace().collect();
             for (idx, token) in tokens.iter().enumerate() {
-                let operand = match tokens.get(idx + 1) {
-                    Some(t) => *t,
-                    None => continue,
-                };
-                let referenced_name = if token.eq_ignore_ascii_case("use") {
-                    operand.split('.').next()
+                // A clause's names run comma-separated to the terminator:
+                // `library ieee, unisim;`, `use a.pkg, b.pkg;`. Each
+                // operand yields its library head; the ';' token ends the
+                // clause.
+                let head = if token.eq_ignore_ascii_case("use") {
+                    Some('.')
                 } else if token.eq_ignore_ascii_case("library") {
-                    Some(operand.trim_end_matches(';').trim())
+                    Some(';')
                 } else {
-                    continue;
+                    None
                 };
-                if let Some(name) = referenced_name {
-                    if !name.is_empty() {
-                        referenced.insert(name.to_lowercase());
+                if let Some(sep) = head {
+                    for operand in &tokens[idx + 1..] {
+                        let name = if sep == '.' {
+                            operand.split('.').next().unwrap_or("")
+                        } else {
+                            operand.trim_end_matches([';', ',']).trim()
+                        };
+                        if !name.is_empty() {
+                            referenced.insert(name.to_lowercase());
+                        }
+                        if operand.contains(';') {
+                            break;
+                        }
                     }
                 }
             }
@@ -124,6 +134,17 @@ mod test {
         );
         let entries = [entry("work", &path)];
         assert_eq!(external_libraries(&entries), Vec::<String>::new());
+    }
+
+    #[test]
+    fn multi_name_clauses_split_on_commas() {
+        let path = fixture(
+            "multi_name",
+            "unit.vhd",
+            "library ieee, UNISIM;\nuse ieee.std_logic_1164.all, UNISIM.VCOMPONENTS.all;\nentity unit is\nend;\n",
+        );
+        let entries = [entry("work", &path)];
+        assert_eq!(external_libraries(&entries), ["unisim"]);
     }
 
     #[test]
