@@ -98,6 +98,18 @@ use crate::proc::{capture, eprint_block, join_log, lossy, print_block};
 /// this alone when the recipe legs are derived.
 pub const VIVADO_BIN_ENV: &str = "VIVADO_BIN";
 
+/// The install-root face (`ORBIT_DRIVES_VIVADO_PATH`): the Vivado
+/// installation directory, from which the drive resolves
+/// `<root>/bin/vivado` and derives every probed launch leg spawn-scoped
+/// (the SuSE ncurses `LD_LIBRARY_PATH` leg, the locale pair). The
+/// `VIVADO_BIN` hook wins over it -- an already-resolved binary is never
+/// re-derived -- and a bare `vivado` on `PATH` is the last fallback.
+/// No settings64 sourcing: the sourced script's PATH/LD results are
+/// exactly what these derivations produce, without the ordering trap
+/// (the sourced script drops the SuSE leg from its head, and xsim then
+/// dies on `libncurses.so.5` -- probed live 2026-11-25).
+pub const VIVADO_PATH_ENV: &str = "ORBIT_DRIVES_VIVADO_PATH";
+
 /// The vivado binary's bare name, the PATH fallback when `VIVADO_BIN` is
 /// unset. The orbit target contract carries no binary-path field.
 pub const VIVADO_BIN: &str = "vivado";
@@ -169,6 +181,19 @@ pub fn vivado_bin(env: Option<&OsStr>) -> PathBuf {
     match env {
         Some(path) if !path.is_empty() => PathBuf::from(path),
         _ => PathBuf::from(VIVADO_BIN),
+    }
+}
+
+/// The full resolution: the `VIVADO_BIN` hook, then the
+/// [`VIVADO_PATH_ENV`] install root's `<root>/bin/vivado`, then the bare
+/// PATH name.
+pub fn resolve_vivado(bin: Option<&OsStr>, root: Option<&OsStr>) -> PathBuf {
+    match bin {
+        Some(b) if !b.is_empty() => PathBuf::from(b),
+        _ => match root {
+            Some(r) if !r.is_empty() => PathBuf::from(r).join("bin").join(VIVADO_BIN),
+            _ => vivado_bin(bin),
+        },
     }
 }
 
@@ -251,12 +276,21 @@ impl Recipe {
         if let Some(locpath) = locpath {
             pairs.push(("LOCPATH".to_string(), locpath));
         }
-        let ld = self
-            .ld_library_path
-            .clone()
-            .or_else(|| suse_lib_dir(vivado).map(|dir| dir.into_os_string()));
-        if let Some(ld) = ld {
+        // SuSE first, the environment's own LD after: an environment LD
+        // without the leg starves the unwrapped binaries' libncurses
+        // (probed live 2026-11-25), and a fully exported recipe keeps its
+        // extra legs behind the derived one.
+        if let Some(dir) = suse_lib_dir(vivado) {
+            let mut ld = dir.into_os_string();
+            if let Some(existing) = &self.ld_library_path {
+                if !existing.is_empty() {
+                    ld.push(":");
+                    ld.push(existing);
+                }
+            }
             pairs.push(("LD_LIBRARY_PATH".to_string(), ld));
+        } else if let Some(ld) = &self.ld_library_path {
+            pairs.push(("LD_LIBRARY_PATH".to_string(), ld.clone()));
         }
         pairs
     }
@@ -519,7 +553,10 @@ impl std::error::Error for NotCarried {}
 /// per top, and judges each run.
 pub fn drive(request: &Drive, mode: Mode) -> Result<(), DriveError> {
     let label = mode.label();
-    let vivado = vivado_bin(std::env::var_os(VIVADO_BIN_ENV).as_deref());
+    let vivado = resolve_vivado(
+        std::env::var_os(VIVADO_BIN_ENV).as_deref(),
+        std::env::var_os(VIVADO_PATH_ENV).as_deref(),
+    );
     // vivado must be spawnable before anything else, so a missing binary
     // is a loud usage error instead of a silent compile failure.
     // `-version` (single dash) is the family's identity face, probed exit
@@ -968,6 +1005,53 @@ fn run_snapshot(
 
 #[cfg(test)]
 mod tests {
+    #[test]
+    fn the_suse_leg_prepends_the_environment_ld() {
+        // the probed recipe shape: SuSE first, the environment's own LD
+        // after -- an environment LD without the leg starves xsim's
+        // libncurses (probed live 2026-11-25: a 22-char foreign LD won
+        // the env-wins rule and the loader refused libncurses.so.5)
+        let recipe = Recipe {
+            lc_all: None,
+            locpath: None,
+            ld_library_path: Some("/home/nabil/tools/lib:".into()),
+            home: None,
+        };
+        let vivado = Path::new("/opt/2025.2.1/Vivado/bin/vivado");
+        let ld = recipe
+            .env_pairs(vivado)
+            .into_iter()
+            .find(|(k, _)| k == "LD_LIBRARY_PATH")
+            .unwrap()
+            .1;
+        assert_eq!(
+            ld.to_string_lossy(),
+            "/opt/2025.2.1/Vivado/lib/lnx64.o/SuSE:/home/nabil/tools/lib:"
+        );
+    }
+
+    #[test]
+    fn vivado_path_face_resolves_the_install_binary() {
+        // the VIVADO_BIN hook wins: an already-set path is never re-derived
+        assert_eq!(
+            resolve_vivado(
+                Some("/opt/other/bin/vivado".as_ref()),
+                Some("/opt/2025.2.1/Vivado".as_ref()),
+            ),
+            PathBuf::from("/opt/other/bin/vivado")
+        );
+        // the install root names <root>/bin/vivado
+        assert_eq!(
+            resolve_vivado(None, Some("/opt/2025.2.1/Vivado".as_ref())),
+            PathBuf::from("/opt/2025.2.1/Vivado/bin/vivado")
+        );
+        // neither: the bare PATH name rides
+        assert_eq!(
+            resolve_vivado(Some("".as_ref()), Some("".as_ref())),
+            PathBuf::from(VIVADO_BIN)
+        );
+    }
+
     use super::*;
     use crate::blueprint::MalformedLine;
 
@@ -1299,7 +1383,10 @@ ERROR: Please check the snapshot name which is created during 'xelab',the curren
                 .into()
         )));
 
-        // The environment's own legs win over every default.
+        // The environment's own LC/LOCPATH legs win; the environment's LD
+        // keeps its legs BEHIND the derived SuSE leg (the probed working
+        // form: `SuSE:$LD_LIBRARY_PATH` -- the prepend is the fix that
+        // keeps a foreign LD from starving libncurses).
         let exported = Recipe {
             lc_all: Some("C.UTF-8".to_string()),
             locpath: Some("/custom/locale".into()),
@@ -1309,7 +1396,13 @@ ERROR: Please check the snapshot name which is created during 'xelab',the curren
         let pairs = exported.env_pairs(vivado);
         assert_eq!(pairs[0], ("LC_ALL".to_string(), "C.UTF-8".into()));
         assert!(pairs.contains(&("LOCPATH".to_string(), "/custom/locale".into())));
-        assert!(pairs.contains(&("LD_LIBRARY_PATH".to_string(), "/custom/lib".into())));
+        let mut expected_ld = Path::new("/opt/2025.2.1/Vivado")
+            .join("lib")
+            .join("lnx64.o")
+            .join("SuSE")
+            .into_os_string();
+        expected_ld.push(":/custom/lib");
+        assert!(pairs.contains(&("LD_LIBRARY_PATH".to_string(), expected_ld)));
     }
 
     #[test]
@@ -1505,5 +1598,4 @@ ERROR: Please check the snapshot name which is created during 'xelab',the curren
         assert_eq!(RUN_TCL, "run all\n");
         assert!(!argv.contains(&String::from("-R")), "no bare -R rides");
     }
-
 }

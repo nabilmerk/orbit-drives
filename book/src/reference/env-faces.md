@@ -11,6 +11,7 @@ stack expresses. All are unset-by-default; all ride verbatim.
 | `ORBIT_DRIVES_NVC_HEAP` | `-H <size>` on every nvc spawn | nvc's default heap |
 | `ORBIT_DRIVES_GHDL_FLAGS` | whitespace-split flags on every ghdl spawn | none |
 | `ORBIT_DRIVES_GHDL_ASSERT_LEVEL` | `--assert-level=<value>` in the run argv | `error` |
+| `ORBIT_DRIVES_VIVADO_PATH` | the Vivado installation root: the drive resolves `<root>/bin/vivado` and derives every probed launch leg spawn-scoped (the SuSE ncurses leg, the locale) -- no settings64 sourcing, and the `VIVADO_BIN` hook wins when it is set | unset |
 | `ORBIT_DRIVES_GHDL_VENDOR_PREFIX` | sets `GHDL_PREFIX` on every ghdl spawn so a referenced vendor library (`unisim`, `unisim_retarget`, ...) resolves from a precompiled prefix; when the blueprint references external libraries and neither this face nor `GHDL_PREFIX` is set, the drive exits 2 with the hint | unset |
 | `ORBIT_PROJECT_LIBRARY` | set by orbit; the drive reads it | — |
 
