@@ -58,15 +58,27 @@ pub fn external_libraries(entries: &[Entry]) -> Vec<String> {
                 };
                 if let Some(sep) = head {
                     for operand in &tokens[idx + 1..] {
-                        let name = if sep == '.' {
-                            operand.split('.').next().unwrap_or("")
-                        } else {
-                            operand.trim_end_matches([';', ',']).trim()
-                        };
-                        if !name.is_empty() {
-                            referenced.insert(name.to_lowercase());
+                        // Configuration binding indications name entities
+                        // and configurations, not libraries: `use entity
+                        // work.comp(rtl);` reaches `work` (predefined), and
+                        // `use open;` names nothing. The keywords ride
+                        // their own tokens, so skipping them keeps the
+                        // following selected name's head as the library.
+                        let bare = operand.trim_end_matches([';', ',']);
+                        let keyword = bare.eq_ignore_ascii_case("entity")
+                            || bare.eq_ignore_ascii_case("configuration")
+                            || bare.eq_ignore_ascii_case("open");
+                        if !keyword {
+                            let name = if sep == '.' {
+                                operand.split('.').next().unwrap_or("")
+                            } else {
+                                operand.trim_end_matches([';', ',']).trim()
+                            };
+                            if !name.is_empty() {
+                                referenced.insert(name.to_lowercase());
+                            }
                         }
-                        if operand.contains(';') {
+                        if operand.contains(';') || bare.eq_ignore_ascii_case("open") {
                             break;
                         }
                     }
@@ -134,6 +146,24 @@ mod test {
         );
         let entries = [entry("work", &path)];
         assert_eq!(external_libraries(&entries), Vec::<String>::new());
+    }
+
+    #[test]
+    fn configuration_binding_indications_are_not_libraries() {
+        let path = fixture(
+            "config_binding",
+            "cfg.vhd",
+            "configuration cfg of unit is\n  for rtl\n    use entity work.comp(rtl);\n  end for;\nend;\n",
+        );
+        let entries = [entry("work", &path)];
+        assert_eq!(external_libraries(&entries), Vec::<String>::new());
+        let open_path = fixture(
+            "config_open",
+            "unit.vhd",
+            "use open;\nentity unit is\nend;\n",
+        );
+        let open_entries = [entry("work", &open_path)];
+        assert_eq!(external_libraries(&open_entries), Vec::<String>::new());
     }
 
     #[test]
