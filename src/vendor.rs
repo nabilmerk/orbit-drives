@@ -114,7 +114,13 @@ pub fn external_libraries(entries: &[Entry]) -> Vec<String> {
                         } else {
                             operand.trim_end_matches([';', ',']).trim()
                         };
-                        if !name.is_empty() {
+                        // a name must carry at least one alphanumeric:
+                        // quoted-operator clauses (`use grlib.stdlib."+";`)
+                        // blank to whitespace in the sanitizer and leave a
+                        // bare terminator token that is never a library
+                        if !name.is_empty()
+                            && name.chars().any(|c| c.is_ascii_alphanumeric())
+                        {
                             referenced.insert(name.to_lowercase());
                         }
                     }
@@ -186,6 +192,21 @@ mod test {
             "-- use unisim.something;\nentity unit is\nend;\n",
         );
         let entries = [entry("work", &path)];
+        assert_eq!(external_libraries(&entries), Vec::<String>::new());
+    }
+
+    #[test]
+    fn quoted_operator_clauses_yield_no_phantom_names() {
+        // the GRLIB idiom `use grlib.stdlib."+";`: the quoted operator
+        // blanks to whitespace in the sanitizer, splitting a bare `;`
+        // terminator token after `use` -- the terminator is never a
+        // library name
+        let path = fixture(
+            "quoted_operator",
+            "unit.vhd",
+            "library gaisler;\nuse gaisler.l2c_lite.all;\nuse grlib.stdlib.\"+\";\nentity unit is\nend;\n",
+        );
+        let entries = [entry("gaisler", &path), entry("grlib", path.with_file_name("other.vhd").as_path())];
         assert_eq!(external_libraries(&entries), Vec::<String>::new());
     }
 
