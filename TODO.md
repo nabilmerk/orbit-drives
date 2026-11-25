@@ -1,5 +1,12 @@
 # TODO
 
+- RESOLVED 2026-11-25: the zedboard drive-path close-out — orbit's
+  `parse_body` counted a process's body-`begin` toward the primary-end
+  nesting, so architectures with processes swallowed every unit
+  declared after them in the same file (`mul_inferred.vhd` fell out of
+  the closure, starving downstream compiles). Fixed on the fork
+  (`fix-parse-nesting`, trunk 296d5452; inline + s14 tests); the drive
+  verdict is `pass` at 940,860 ns through the shipped vivado face.
 - RESOLVED 2026-11-22: the pass-marker face shipped
   (`ORBIT_DRIVES_PASS_MARKER`, the judge's third witness on all six sim
   faces; the live three-arm proof rides the ghdl shape suite).
@@ -17,17 +24,6 @@
 
 ## Parked
 
-- the zedboard drive-path close-out (2026-11-25): orbit's planner
-  closure drops `mul_inferred.vhd` even with the direct-entity
-  dependency (`entity techmap.gen_mult_pipe` in the demo's
-  techmult.vhd) — the file parses and ALLHDL sees it, but the
-  demo-graph closure stays at 112 rows, so the drive's xvhdl
-  compiles techmult against a library without the entity and
-  exit-2s after the 2-pass deferral. The systest itself PASSES
-  (940,860 ns, the Nov 8 reference figure) via direct
-  xvhdl/xelab/xsim; next probe: a two-project minimal case against
-  `compute_local_graph`'s traversal (upstream-class, sibling of the
-  tokenizer finding).
 - the vivado std face: xvhdl/xvlog std selectors unmapped in v1 (the
   tool is absent on this box; the fork's orbit#24 std rides every other
   drive).

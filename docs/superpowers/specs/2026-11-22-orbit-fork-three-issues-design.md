@@ -434,14 +434,44 @@ Root cause chain (two walls, both root-caused):
 The Nov 8 reference is explained: its 16 s CPU matches the passing
 run's; it compiled the pristine bridge. No missing ingredient.
 
-Open item (next round): the drive path still fails — the regenerated
-closure blueprint still omits `mul_inferred.vhd` (112 rows), so the
-drive's xvhdl compiles `techmult.vhd` against a library without the
-entity and exit-2s after its 2-pass deferral loop. The direct-entity
-edge exists in the source but does not connect inside the demo's
-multi-project graph, while single-file planning and ALLHDL discovery
-both see the file. Next probe: a two-project minimal case against
-`compute_local_graph`'s traversal; the fix is orbit-side
-(upstream-class, sibling of the parked tokenizer finding) or a
-closure-side workaround. The pass-marker witness has not yet fired
-through the drive itself.
+The closure gap closed (2026-11-25, afternoon round). Root cause:
+orbit's VHDL `parse_body` counted a nested concurrent body's bare
+`begin` (a process's body-begin, reached after the header clause
+`lbl : process` and the sensitivity-list clause were consumed as
+discarded statements) toward the primary-end nesting counter — but
+`end process;`/`end if;` are rejected by `is_primary_ending` and never
+decrement it. Any architecture containing a process therefore exited
+its body one primary `end;` late and silently swallowed every design
+unit declared after it in the same file. `gen_mul_61x61`'s
+process-bearing architecture swallowed `gen_mult_pipe` (and its
+architecture): the entity never became a graph node, the
+techmult->gen_mult_pipe edge had no target, and the closure dropped
+`mul_inferred.vhd` (the 112-row blueprint). The live trace pinned the
+counter walking 1->2 at the process begin and exiting at the NEXT
+unit's `end;`. The one-entity-per-file style of modern GRLIB masked
+the bug everywhere else.
+
+The fix (orbit fork, branch `fix-parse-nesting`, merged to trunk
+296d5452): the bare-begin branch no longer increments the counter.
+TDD: inline test `test_units_after_multi_process_arch` (fixture
+`tests/t5/multi_unit_proc.vhd`) pins the parser; system test `s14`
+pins the closure end-to-end (multi-unit file, package-declared
+component via `use techmap.allmul.all`, cross-library path
+dependency; `probe` target rides the s10-style regional config).
+Gates: inline suite 173 passed, all 13 system scripts green, the
+binary reinstalled (`cargo install --path`).
+
+The demo tree is pristine again: the techmult direct-entity
+workaround reverted (byte-identical to
+grlib-gpl/lib/techmap/maps/techmult.vhd).
+
+The drive verdict: `orbit-drives: vivado: sim: testbench: pass` —
+blueprint 113 rows (`mul_inferred.vhd` rides), the shipped vivado
+face ran compile + elaborate + sim, and the judge fired:
+`Test passed, halting with IU error mode` at **940,860 ns** — the
+Nov 8 reference figure, now through the drive itself. The zedboard
+campaign closes at every level.
+
+Upstream note: the fix rides the fork's trunk; opening the
+chaseruskin/orbit PR is the owner's call (the finding is
+upstream-class, sibling of the parked tokenizer finding).
