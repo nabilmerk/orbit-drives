@@ -17,11 +17,17 @@
 
 ## Parked
 
-- the cocotb and quartus sim faces' raw `fileset != "VHDL"` filter
-  (cocotb.rs / quartus.rs): it bypasses the ALLHDL-by-extension routing
-  every shipped target rides (`is_vhdl_row`), so an ALLHDL blueprint's
-  `.vhd` rows are refused exit-2 through those two faces -- surfaced by
-  the fork campaign's code map, 2026-11-22.
+- the zedboard drive-path close-out (2026-11-25): orbit's planner
+  closure drops `mul_inferred.vhd` even with the direct-entity
+  dependency (`entity techmap.gen_mult_pipe` in the demo's
+  techmult.vhd) — the file parses and ALLHDL sees it, but the
+  demo-graph closure stays at 112 rows, so the drive's xvhdl
+  compiles techmult against a library without the entity and
+  exit-2s after the 2-pass deferral. The systest itself PASSES
+  (940,860 ns, the Nov 8 reference figure) via direct
+  xvhdl/xelab/xsim; next probe: a two-project minimal case against
+  `compute_local_graph`'s traversal (upstream-class, sibling of the
+  tokenizer finding).
 - the vivado std face: xvhdl/xvlog std selectors unmapped in v1 (the
   tool is absent on this box; the fork's orbit#24 std rides every other
   drive).

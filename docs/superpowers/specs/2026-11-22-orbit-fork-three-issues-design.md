@@ -375,3 +375,73 @@ upstream stack, so it is not the campaign's regression. The open
 question for the owner: how was the Nov 8 vivado run invoked (shell,
 env, srec generation state) — the answer names the missing
 ingredient.
+
+## The zedboard simulation campaign closes (2026-11-25)
+
+The open question answered itself from the box: bash history held the
+Nov 8 invocation (bare `orbit test --target vivado-clean --tb
+testbench --dut leon3mp`, no env legs), and the morning probes
+(probe11/12) reframed the stall as a bus-level deadlock, not an
+invocation mystery.
+
+**Verdict: the full GRLIB leon3 zedboard systest PASSES** —
+`Test passed, halting with IU error mode` at **940,860 ns**, the
+exact Nov 8 reference figure, same 16 s wall, same 1389 MB peak
+(memory test, register file, multiplier, radix-2 divider, cache,
+MMU, IRQMP, timers incl. chain mode, UART). Run via xvhdl/xelab/xsim
+directly on the closure design (tb2, default optimization); see the
+open item for the drive-path caveat.
+
+Root cause chain (two walls, both root-caused):
+
+1. **The 7,842 ns stall — a stale compiled unit.** The simulation
+   executed `ahb2axib` from a vdb compiled Nov 24 22:57, while the
+   source was reverted to pristine grlib-gpl-identical content at
+   Nov 25 08:11. The stale unit's process tail propagated
+   `r.aximout` to `aximo_ext` field-wise and dropped `ar.valid`/
+   `ar.addr` (probes 17–19: register `ar.valid=1`, addr
+   `0x40000000`, len 07; the ext record got len 07 but `valid=U`,
+   `addr=U` — a partial whole-record copy that the pristine
+   source's tail cannot produce). The bridge accepted the CPU's
+   first-ever RAM fetch (state `read`, hsel slv3, htrans NONSEQ),
+   held the AXI AR forever, the stub's fake-PS FSM sat idle, hready
+   stayed low, and the design went event-silent at the PROM→RAM
+   jump. Controls: `-O0` re-elaboration reproduced it (not an
+   optimizer artifact); recompiling the pristine source fixed the
+   propagation (valid=1/addr propagate, AR handshake completes at
+   7,900 ns). The 598 assertion errors ("Direct narrow burst
+   propagation…") are noise: the upstream guard fires on the
+   `endianness_mode=1` + default `narrow_acc_mode=1` combo on every
+   record event, narrow or not — the bridge services everything via
+   the per-beat fallback (ahb2axib.vhd:506,615).
+2. **The multiplier wall (235 µs, `error (2)`) — a planner closure
+   gap.** `techmap/rtl/inferred/mul_inferred.vhd` (the
+   `gen_mult_pipe` entity) is discovered (ALLHDL blueprint row
+   exists) and parses clean (a one-file project plans it), but the
+   closure excludes it: the only inbound edge is `techmult`'s
+   `gen_mult_pipe` instantiation, whose component is package-declared
+   (`use techmap.allmul.all`, allmul.vhd:47). orbit's
+   `connect_edges_from_vhdl` resolves prefix-less VHDL component
+   instantiations only through `component_pairs`, which the
+   Verilog/SV node creators populate and the VHDL creator never
+   does — the edge never forms, the file drops out, xsim elaborates
+   `gen_mult_pipe` as a black box (xelab VRFC 10-4940), and the
+   multiplier test reads garbage. Workaround shipped in the demo
+   tree: direct entity instantiation (`entity techmap.gen_mult_pipe`)
+   at techmult.vhd's two inferred-arch sites (134, 182) — the systest
+   then passes end-to-end.
+
+The Nov 8 reference is explained: its 16 s CPU matches the passing
+run's; it compiled the pristine bridge. No missing ingredient.
+
+Open item (next round): the drive path still fails — the regenerated
+closure blueprint still omits `mul_inferred.vhd` (112 rows), so the
+drive's xvhdl compiles `techmult.vhd` against a library without the
+entity and exit-2s after its 2-pass deferral loop. The direct-entity
+edge exists in the source but does not connect inside the demo's
+multi-project graph, while single-file planning and ALLHDL discovery
+both see the file. Next probe: a two-project minimal case against
+`compute_local_graph`'s traversal; the fix is orbit-side
+(upstream-class, sibling of the parked tokenizer finding) or a
+closure-side workaround. The pass-marker witness has not yet fired
+through the drive itself.
