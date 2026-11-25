@@ -202,8 +202,6 @@
   both on PATH); a box without them fails the build step loudly,
   surfaced as an exit-1 build failure with the toolchain's own output
   relayed.
-- **The run log is captured, then relayed**, not streamed; a long
-  simulation's output appears when the run ends.
 - **The tools resolve on PATH, vivado and quartus from their env
   hooks.** The orbit target contract carries no binary-path field: every
   drive but those two pins the bare name; vivado resolves from

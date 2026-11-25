@@ -35,16 +35,16 @@ jobs:
   image:
     runs-on: ubuntu-latest
     steps:
-      - uses: actions/checkout@v4
-      - uses: docker/login-action@v3
+      - uses: actions/checkout@v7
+      - uses: docker/login-action@v4
         with:
           registry: ghcr.io
           username: ${{ github.actor }}
           password: ${{ secrets.GITHUB_TOKEN }}
       # the gha cache backend needs the docker-container driver; the default
       # docker driver rejects cache export (first run's failure)
-      - uses: docker/setup-buildx-action@v3
-      - uses: docker/build-push-action@v6
+      - uses: docker/setup-buildx-action@v4
+      - uses: docker/build-push-action@v7
         with:
           context: .github/docker
           file: .github/docker/linux.Dockerfile
@@ -61,7 +61,7 @@ jobs:
     container:
       image: ghcr.io/nabilmerk/orbit-drives-ci-linux:latest
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@v7
       - uses: dtolnay/rust-toolchain@stable
       - name: Assert the promised set
         run: |
@@ -79,7 +79,7 @@ jobs:
     runs-on: windows-latest
     timeout-minutes: 60
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@v7
       - name: Install the promised set
         shell: pwsh
         env:
@@ -92,7 +92,7 @@ jobs:
     runs-on: macos-latest
     timeout-minutes: 45
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@v7
       - run: bash .github/scripts/setup-macos.sh
         env:
           GH_TOKEN: ${{ github.token }}

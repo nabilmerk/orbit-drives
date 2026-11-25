@@ -51,11 +51,13 @@
   ("invalid syntax"); upstream-class finding, recorded for the issue
   queue.
 
-- the honest-limits duplicated run-log bullet (a merge-candidate on the
-  next touch).
-- the quickstart prose-vs-link polish.
-- the mdbook install caching (a future CI pass).
-- the action/runner version-bump pass.
+- RESOLVED 2026-11-25 (the polish batch): the honest-limits duplicate
+  bullet merged, the quickstart's prose pointers linked to the honest
+  limits, the pages workflow caches cargo builds (mdbook installs only
+  on dependency changes), and every pinned action bumped to its
+  current major (probed via the releases API: checkout v7,
+  configure-pages v6, upload-pages-artifact v5, deploy-pages v5,
+  login-action v4, setup-buildx-action v4, build-push-action v7).
 - the cocotb PYTHON_BIN Windows face (the loud exit-2 by design).
 - RESOLVED 2026-11-22 (the deferred-minors round): the sibling
   same-library relative-dep fixture (s10 case D, "local" now honest),
