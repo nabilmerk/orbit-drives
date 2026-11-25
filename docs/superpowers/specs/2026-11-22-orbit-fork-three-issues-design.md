@@ -519,6 +519,24 @@ libraries from the blueprint alone, wires the prefix on every spawn, and
 exit-2s with a hint when nothing is provisioned. The manual mirror above
 is the same layout the face consumes.
 
+Dissolved the same day (the vendor-minors round's second half): the
+provisioning is ORBIT-NATIVE now. The blocked path -- vendor primitives
+as blueprint rows -- opened once its two blockers landed: the
+file-closure expansion (the wrappers' sibling use-clauses pull the
+primitive files) and the `vpkg` keyword fix (orbit over-reserved the
+Xilinx package name alongside the real PSL trio; the parked multi-dim
+array diagnosis was wrong -- those arrays parse fine). The primitive
+sources vendored in `<demo>/unisim/rtl` (the ISE-era VCOMPONENTS, VPKG,
+and the primitive set), the `unisim` path dependency rides the design
+manifest, ghdl compiles them per-run into the target's own
+`unisim-obj93.cf` -- no GHDL_PREFIX, no external dirs. The recipe's
+flags settled by probe: `-fexplicit -fsynopsys -frelaxed` (the
+PLLE2_ADV SIGNED/NUMERIC_STD "=" ambiguity needs -fexplicit, probed),
+and nvc's `--relaxed` is command-scope in nvc 1.23 -- the nvc face's
+splice moved to the analyze command block (probed: rejected in the
+global lead). The prefix face stays in the drive for corpora whose
+vendor libraries cannot ride as rows.
+
 A second orbit fix landed in service of the ghdl check: the plan
 closure now rides whole files (`expand_order_to_file_closure`,
 trunk c2e226c7) -- a planned file carries the dependencies of every
