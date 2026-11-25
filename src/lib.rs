@@ -50,6 +50,7 @@
 
 pub mod blueprint;
 pub mod stdmap;
+pub mod vendor;
 pub mod cocotb;
 pub mod contracts;
 pub mod ghdl;
