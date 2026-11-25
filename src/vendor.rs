@@ -22,12 +22,56 @@ use std::path::{Path, PathBuf};
 /// The libraries every HDL tool defines on its own; never external.
 pub const PREDEFINED_LIBS: [&str; 3] = ["ieee", "std", "work"];
 
+/// Blanks string-literal contents and comments to spaces over the whole
+/// text, preserving newlines: string literals may hold both `--` and
+/// clause-shaped text, and a `--` inside a literal is not a comment. The
+/// result tokenizes like the code, minus everything the scan must not
+/// see.
+fn sanitize(text: &str) -> String {
+    let mut out = String::with_capacity(text.len());
+    let mut in_string = false;
+    let mut chars = text.chars().peekable();
+    while let Some(c) = chars.next() {
+        if in_string {
+            if c == '"' {
+                if chars.peek() == Some(&'"') {
+                    let _ = chars.next();
+                    out.push_str("  ");
+                } else {
+                    in_string = false;
+                    out.push(' ');
+                }
+            } else {
+                out.push(if c == '\n' { '\n' } else { ' ' });
+            }
+        } else if c == '"' {
+            in_string = true;
+            out.push(' ');
+        } else if c == '-' && chars.peek() == Some(&'-') {
+            let _ = chars.next();
+            out.push_str("  ");
+            // a comment ends at the newline -- consuming further would
+            // blank the rest of the file, clauses included
+            while let Some(&rest) = chars.peek() {
+                if rest == '\n' {
+                    break;
+                }
+                out.push(' ');
+                chars.next();
+            }
+        } else {
+            out.push(c);
+        }
+    }
+    out
+}
+
 /// The sorted, deduped, lowercase set of libraries the entries' files
 /// reference through `use`/`library` clauses but neither the entries'
 /// own `library` fields nor [`PREDEFINED_LIBS`] provide. Unreadable
 /// files contribute nothing.
 pub fn external_libraries(entries: &[Entry]) -> Vec<String> {
-    let mut carried: HashSet<String> = entries
+    let carried: HashSet<String> = entries
         .iter()
         .map(|e| e.library.to_lowercase())
         .chain(PREDEFINED_LIBS.iter().map(|s| s.to_string()))
@@ -38,49 +82,44 @@ pub fn external_libraries(entries: &[Entry]) -> Vec<String> {
             Ok(d) => d,
             Err(_) => continue,
         };
-        for line in String::from_utf8_lossy(&data).lines() {
-            let code = match line.find("--") {
-                Some(i) => &line[..i],
-                None => line,
+        let text = sanitize(&String::from_utf8_lossy(&data));
+        let tokens: Vec<&str> = text.split_whitespace().collect();
+        for (idx, token) in tokens.iter().enumerate() {
+            // A clause's names run comma-separated to the terminator:
+            // `library ieee, unisim;`, `use a.pkg, b.pkg;`. Each
+            // operand yields its library head; the ';' token ends the
+            // clause.
+            let head = if token.eq_ignore_ascii_case("use") {
+                Some('.')
+            } else if token.eq_ignore_ascii_case("library") {
+                Some(';')
+            } else {
+                None
             };
-            let tokens: Vec<&str> = code.split_whitespace().collect();
-            for (idx, token) in tokens.iter().enumerate() {
-                // A clause's names run comma-separated to the terminator:
-                // `library ieee, unisim;`, `use a.pkg, b.pkg;`. Each
-                // operand yields its library head; the ';' token ends the
-                // clause.
-                let head = if token.eq_ignore_ascii_case("use") {
-                    Some('.')
-                } else if token.eq_ignore_ascii_case("library") {
-                    Some(';')
-                } else {
-                    None
-                };
-                if let Some(sep) = head {
-                    for operand in &tokens[idx + 1..] {
-                        // Configuration binding indications name entities
-                        // and configurations, not libraries: `use entity
-                        // work.comp(rtl);` reaches `work` (predefined), and
-                        // `use open;` names nothing. The keywords ride
-                        // their own tokens, so skipping them keeps the
-                        // following selected name's head as the library.
-                        let bare = operand.trim_end_matches([';', ',']);
-                        let keyword = bare.eq_ignore_ascii_case("entity")
-                            || bare.eq_ignore_ascii_case("configuration")
-                            || bare.eq_ignore_ascii_case("open");
-                        if !keyword {
-                            let name = if sep == '.' {
-                                operand.split('.').next().unwrap_or("")
-                            } else {
-                                operand.trim_end_matches([';', ',']).trim()
-                            };
-                            if !name.is_empty() {
-                                referenced.insert(name.to_lowercase());
-                            }
+            if let Some(sep) = head {
+                for operand in &tokens[idx + 1..] {
+                    // Configuration binding indications name entities
+                    // and configurations, not libraries: `use entity
+                    // work.comp(rtl);` reaches `work` (predefined), and
+                    // `use open;` names nothing. The keywords ride
+                    // their own tokens, so skipping them keeps the
+                    // following selected name's head as the library.
+                    let bare = operand.trim_end_matches([';', ',']);
+                    let keyword = bare.eq_ignore_ascii_case("entity")
+                        || bare.eq_ignore_ascii_case("configuration")
+                        || bare.eq_ignore_ascii_case("open");
+                    if !keyword {
+                        let name = if sep == '.' {
+                            operand.split('.').next().unwrap_or("")
+                        } else {
+                            operand.trim_end_matches([';', ',']).trim()
+                        };
+                        if !name.is_empty() {
+                            referenced.insert(name.to_lowercase());
                         }
-                        if operand.contains(';') || bare.eq_ignore_ascii_case("open") {
-                            break;
-                        }
+                    }
+                    if operand.contains(';') || bare.eq_ignore_ascii_case("open") {
+                        break;
                     }
                 }
             }
@@ -98,7 +137,9 @@ pub fn external_libraries(entries: &[Entry]) -> Vec<String> {
 /// scratch directory (the parked pid-keyed collision: key by test name).
 #[cfg(test)]
 fn fixture(name: &str, file: &str, content: &str) -> PathBuf {
-    let dir = std::env::temp_dir().join(concat!("orbit_vendor_", env!("CARGO_PKG_NAME"))).join(name);
+    let dir = std::env::temp_dir()
+        .join(concat!("orbit_vendor_", env!("CARGO_PKG_NAME")))
+        .join(name);
     let _ = fs::remove_dir_all(&dir);
     fs::create_dir_all(&dir).unwrap();
     let path = dir.join(file);
@@ -146,6 +187,61 @@ mod test {
         );
         let entries = [entry("work", &path)];
         assert_eq!(external_libraries(&entries), Vec::<String>::new());
+    }
+
+    #[test]
+    fn comments_blank_only_their_own_line() {
+        let path = fixture(
+            "header_comment",
+            "unit.vhd",
+            "-- a header comment\nlibrary IEEE;\nuse IEEE.std_logic_1164.all;\nuse unisim.vcomponents.all;\nentity unit is\nend;\n",
+        );
+        let entries = [entry("work", &path)];
+        assert_eq!(external_libraries(&entries), ["unisim"]);
+    }
+
+    #[test]
+    fn string_literal_references_do_not_count() {
+        let path = fixture(
+            "string_literal",
+            "unit.vhd",
+            "report \" use unisim.vcomponents.all; \" severity note;\nentity unit is\nend;\n",
+        );
+        let entries = [entry("work", &path)];
+        assert_eq!(external_libraries(&entries), Vec::<String>::new());
+    }
+
+    #[test]
+    fn comment_marker_inside_string_is_not_a_comment() {
+        let path = fixture(
+            "comment_in_string",
+            "unit.vhd",
+            "constant s : string := \"--\"; use unisim.vcomponents.all;\nentity unit is\nend;\n",
+        );
+        let entries = [entry("work", &path)];
+        assert_eq!(external_libraries(&entries), ["unisim"]);
+    }
+
+    #[test]
+    fn multi_line_library_clause_is_found() {
+        let path = fixture(
+            "multi_line",
+            "unit.vhd",
+            "library\n  UNISIM;\nentity unit is\nend;\n",
+        );
+        let entries = [entry("work", &path)];
+        assert_eq!(external_libraries(&entries), ["unisim"]);
+    }
+
+    #[test]
+    fn externals_are_sorted() {
+        let path = fixture(
+            "sorted",
+            "unit.vhd",
+            "use zeta.lib.all;\nlibrary alpha;\nentity unit is\nend;\n",
+        );
+        let entries = [entry("work", &path)];
+        assert_eq!(external_libraries(&entries), ["alpha", "zeta"]);
     }
 
     #[test]

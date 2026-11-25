@@ -29,8 +29,8 @@
 //! still borrows it from this first drive that carried it), the library
 //! wipe, the run, and the judge.
 
-use std::fs;
 use std::fmt;
+use std::fs;
 use std::path::{Path, PathBuf};
 use std::process::Command;
 
@@ -126,7 +126,7 @@ pub const ASSERT_LEVEL_ENV: &str = "ORBIT_DRIVES_GHDL_ASSERT_LEVEL";
 /// own error convicts a wrong provision. The companion detector is
 /// [`crate::vendor::external_libraries`]: referenced-but-uncarried
 /// libraries with this face unset and no environment `GHDL_PREFIX`
-/// trip the pre-analysis gate (the [`VENDOR_GATE`] face).
+/// trip the pre-analysis gate.
 pub const VENDOR_PREFIX_ENV: &str = "ORBIT_DRIVES_GHDL_VENDOR_PREFIX";
 
 /// The resolver behind the assert-level override, pure so the tests can
@@ -140,20 +140,41 @@ fn assert_level_from(value: Option<&str>) -> String {
 
 /// The pure arm behind [`apply_vendor_prefix`]: a trimmed non-empty
 /// value pins `GHDL_PREFIX`; unset or blank leaves the spawn untouched.
-fn apply_vendor_prefix_from(command: &mut Command, value: Option<&str>) {
-    if let Some(dir) = value.map(str::trim).filter(|v| !v.is_empty()) {
+fn apply_vendor_prefix_from(command: &mut Command, value: Option<&std::ffi::OsStr>) {
+    if let Some(dir) = value.filter(|d| !d.to_string_lossy().trim().is_empty()) {
         command.env("GHDL_PREFIX", dir);
     }
 }
 
 /// The env-reading arm: the [`VENDOR_PREFIX_ENV`] face, resolved per
 /// spawn.
-fn vendor_prefix() -> Option<String> {
-    std::env::var(VENDOR_PREFIX_ENV).ok().map(|v| v.trim().to_string()).filter(|v| !v.is_empty())
+fn vendor_prefix() -> Option<std::ffi::OsString> {
+    std::env::var_os(VENDOR_PREFIX_ENV).filter(|v| !v.to_string_lossy().trim().is_empty())
 }
 
 fn apply_vendor_prefix(command: &mut Command) {
     apply_vendor_prefix_from(command, vendor_prefix().as_deref());
+}
+
+/// True when the environment's own `GHDL_PREFIX` carries a non-empty
+/// value (non-Unicode bytes included -- the drive spawns inherit them).
+fn env_prefix_set() -> bool {
+    std::env::var_os("GHDL_PREFIX")
+        .map(|v| !v.to_string_lossy().trim().is_empty())
+        .unwrap_or(false)
+}
+
+/// The provisioned-path note: one line naming the prefix and the
+/// external set -- but only when there IS an external set; exporting the
+/// face globally on a vendor-free design prints nothing.
+fn vendor_note(externals: &[String], dir: &str) -> Option<String> {
+    if externals.is_empty() {
+        return None;
+    }
+    Some(format!(
+        "vendor prefix: {dir} (external libraries: {})",
+        externals.join(", ")
+    ))
 }
 
 /// The pre-analysis gate: referenced-but-uncarried libraries with no
@@ -168,7 +189,7 @@ fn vendor_gate(externals: &[String], face_set: bool, env_prefix_set: bool) -> Re
     Err(format!(
         "the blueprint references libraries this drive does not carry: {} -- \
          provision a compiled vendor library (ghdl's scripts/vendors/compile-xilinx-vivado.sh, \
-         the recipe in the campaign record) and pass it via {}, \
+         the recipe in this book's env-faces reference) and pass it via {}, \
          or set GHDL_PREFIX in the environment",
         externals.join(", "),
         VENDOR_PREFIX_ENV
@@ -364,7 +385,7 @@ pub enum DriveError {
     /// provision: usage-class, exit 2 -- the hint names them and the
     /// recipe.
     Vendor(String),
-        /// At least one run log carried a failure face: findings, exit 1.
+    /// At least one run log carried a failure face: findings, exit 1.
     Findings(Vec<RunOutcome>),
 }
 
@@ -470,32 +491,6 @@ pub fn drive(request: &Drive, mode: Mode) -> Result<(), DriveError> {
     // The std pre-flight: every row's selector resolves before the
     // deferral loop burns passes on a token ghdl cannot carry -- the
     // fork's orbit#24 face, resolved once per row, loudly when refused.
-    // The external-library gate: referenced-but-uncarried libraries with
-    // no provision refuse up front -- a mid-analysis missing-unit error
-    // after minutes of analyzing teaches nothing the hint does not.
-    let externals = crate::vendor::external_libraries(&carried);
-    let env_prefix_set = std::env::var("GHDL_PREFIX")
-        .map(|v| !v.trim().is_empty())
-        .unwrap_or(false);
-    match vendor_prefix() {
-        Some(dir) => println!(
-            "orbit-drives: ghdl: {label}: vendor prefix: {dir} (external libraries: {})",
-            externals.join(", ")
-        ),
-        None => {
-            if !externals.is_empty() && env_prefix_set {
-                println!(
-                    "orbit-drives: ghdl: {label}: note: external libraries {} ride the environment's GHDL_PREFIX",
-                    externals.join(", ")
-                );
-            }
-        }
-    }
-    if let Err(message) = vendor_gate(&externals, vendor_prefix().is_some(), env_prefix_set) {
-        eprintln!("orbit-drives: ghdl: error: {message}");
-        return Err(DriveError::Vendor(message));
-    }
-
     let std_flags_of_row: Vec<Vec<String>> = carried
         .iter()
         .map(|entry| row_std_flags(entry.std.as_deref()))
@@ -504,6 +499,27 @@ pub fn drive(request: &Drive, mode: Mode) -> Result<(), DriveError> {
             eprintln!("orbit-drives: ghdl: error: no std selector for the row's std: {e}");
             e
         })?;
+
+    // The external-library gate: referenced-but-uncarried libraries with
+    // no provision refuse up front -- a mid-analysis missing-unit error
+    // after minutes of analyzing teaches nothing the hint does not.
+    let externals = crate::vendor::external_libraries(&carried);
+    let prefix = vendor_prefix();
+    let env_prefix_set = env_prefix_set();
+    if let Some(dir) = &prefix {
+        if let Some(note) = vendor_note(&externals, &dir.to_string_lossy()) {
+            println!("orbit-drives: ghdl: {label}: {note}");
+        }
+    } else if !externals.is_empty() && env_prefix_set {
+        println!(
+            "orbit-drives: ghdl: {label}: note: external libraries {} ride the environment's GHDL_PREFIX",
+            externals.join(", ")
+        );
+    }
+    if let Err(message) = vendor_gate(&externals, prefix.is_some(), env_prefix_set) {
+        eprintln!("orbit-drives: ghdl: error: {message}");
+        return Err(DriveError::Vendor(message));
+    }
 
     println!(
         "orbit-drives: ghdl: {label}: analyzing {} VHDL file(s) in blueprint order",
@@ -552,7 +568,7 @@ pub fn drive(request: &Drive, mode: Mode) -> Result<(), DriveError> {
     for top in &request.tops {
         println!("orbit-drives: ghdl: {label}: elaborating {top}");
         let mut elaborate = Command::new(GHDL_BIN);
-    apply_vendor_prefix(&mut elaborate);
+        apply_vendor_prefix(&mut elaborate);
         // The top's library rides every command (`--work=<library>`):
         // ghdl's bare-top commands search the work library only, so the
         // pin is load-bearing -- see `top_library`.
@@ -849,7 +865,7 @@ mod tests {
     #[test]
     fn vendor_prefix_face_wires_ghdl_prefix_env() {
         let mut command = Command::new("true");
-        apply_vendor_prefix_from(&mut command, Some("/tmp/vend"));
+        apply_vendor_prefix_from(&mut command, Some(std::ffi::OsStr::new("/tmp/vend")));
         let pinned = command
             .get_envs()
             .find(|(k, _)| *k == std::ffi::OsStr::new("GHDL_PREFIX"))
@@ -861,6 +877,21 @@ mod tests {
     fn unprovisioned_externals_trip_the_gate() {
         let hint = vendor_gate(&["unisim".to_string()], false, false).unwrap_err();
         assert!(hint.contains("unisim"));
+        assert!(!hint.contains("campaign record"));
+    }
+
+    #[test]
+    fn vendor_exit_class_is_usage() {
+        assert_eq!(DriveError::Vendor("hint".to_string()).exit_code(), 2);
+    }
+
+    #[test]
+    fn provisioned_note_needs_externals() {
+        assert_eq!(
+            vendor_note(&["unisim".to_string()], "/tmp/vend").as_deref(),
+            Some("vendor prefix: /tmp/vend (external libraries: unisim)")
+        );
+        assert_eq!(vendor_note(&[], "/tmp/vend"), None);
     }
 
     #[test]
@@ -878,7 +909,7 @@ mod tests {
             .get_envs()
             .all(|(k, _)| k != std::ffi::OsStr::new("GHDL_PREFIX")));
         let mut blank = Command::new("true");
-        apply_vendor_prefix_from(&mut blank, Some("   "));
+        apply_vendor_prefix_from(&mut blank, Some(std::ffi::OsStr::new("   ")));
         assert!(blank
             .get_envs()
             .all(|(k, _)| k != std::ffi::OsStr::new("GHDL_PREFIX")));
@@ -1137,14 +1168,8 @@ tb_err.vhd:9:5:@0ms:(report note): simulation continued
         // override rides verbatim in the run argv's post-top slot;
         // unset, empty, and blank fall back to the default pin. Pure
         // resolver -- no process-env mutation.
-        assert_eq!(
-            assert_level_from(Some("failure")),
-            "--assert-level=failure"
-        );
-        assert_eq!(
-            assert_level_from(Some("  note  ")),
-            "--assert-level=note"
-        );
+        assert_eq!(assert_level_from(Some("failure")), "--assert-level=failure");
+        assert_eq!(assert_level_from(Some("  note  ")), "--assert-level=note");
         assert_eq!(assert_level_from(None), ASSERT_LEVEL);
         assert_eq!(assert_level_from(Some("")), ASSERT_LEVEL);
         assert_eq!(assert_level_from(Some("   ")), ASSERT_LEVEL);
@@ -1245,10 +1270,7 @@ tb_err.vhd:9:5:@0ms:(report note): simulation continued
             token: String::from("87"),
         };
         let face = e.to_string();
-        assert!(
-            face.contains("no std selector for \"87\""),
-            "got: {face}"
-        );
+        assert!(face.contains("no std selector for \"87\""), "got: {face}");
         assert!(
             face.contains("ghdl 6.0 carries 93, 08, and 19"),
             "got: {face}"
