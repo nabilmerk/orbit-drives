@@ -116,6 +116,19 @@ fn extra_flags() -> Vec<String> {
 /// the earlier [`FLAGS_ENV`] position -- it owns its slot.
 pub const ASSERT_LEVEL_ENV: &str = "ORBIT_DRIVES_GHDL_ASSERT_LEVEL";
 
+/// The env face for a provisioned vendor-library prefix
+/// (`ORBIT_DRIVES_GHDL_VENDOR_PREFIX`): when set, the value rides as
+/// `GHDL_PREFIX` on every ghdl spawn (analyze, elaborate, run) -- ghdl
+/// 6's library loader searches `<prefix>/<lib>/v93/<lib>-obj<STD>.cf`,
+/// probed live 2026-11-25 (the GRLIB leon3 zedboard systest: the same
+/// std as the design rows, so no cross-std suffix mismatch). The dir is
+/// passed verbatim -- no canonicalization, no existence check; ghdl's
+/// own error convicts a wrong provision. The companion detector is
+/// [`crate::vendor::external_libraries`]: referenced-but-uncarried
+/// libraries with this face unset and no environment `GHDL_PREFIX`
+/// trip the pre-analysis gate (the [`VENDOR_GATE`] face).
+pub const VENDOR_PREFIX_ENV: &str = "ORBIT_DRIVES_GHDL_VENDOR_PREFIX";
+
 /// The resolver behind the assert-level override, pure so the tests can
 /// pin both arms without touching the process env.
 fn assert_level_from(value: Option<&str>) -> String {
@@ -123,6 +136,20 @@ fn assert_level_from(value: Option<&str>) -> String {
         Some(v) if !v.is_empty() => format!("--assert-level={v}"),
         _ => ASSERT_LEVEL.to_string(),
     }
+}
+
+/// The pure arm behind [`apply_vendor_prefix`]: a trimmed non-empty
+/// value pins `GHDL_PREFIX`; unset or blank leaves the spawn untouched.
+fn apply_vendor_prefix_from(command: &mut Command, value: Option<&str>) {
+    if let Some(dir) = value.map(str::trim).filter(|v| !v.is_empty()) {
+        command.env("GHDL_PREFIX", dir);
+    }
+}
+
+/// The env-reading arm: the [`VENDOR_PREFIX_ENV`] face, resolved per
+/// spawn.
+fn apply_vendor_prefix(command: &mut Command) {
+    apply_vendor_prefix_from(command, std::env::var(VENDOR_PREFIX_ENV).ok().as_deref());
 }
 
 fn assert_level_arg() -> String {
@@ -470,6 +497,7 @@ pub fn drive(request: &Drive, mode: Mode) -> Result<(), DriveError> {
     for top in &request.tops {
         println!("orbit-drives: ghdl: {label}: elaborating {top}");
         let mut elaborate = Command::new(GHDL_BIN);
+    apply_vendor_prefix(&mut elaborate);
         // The top's library rides every command (`--work=<library>`):
         // ghdl's bare-top commands search the work library only, so the
         // pin is load-bearing -- see `top_library`.
@@ -552,6 +580,7 @@ fn run_top(
         e
     })?;
     let mut run = Command::new(GHDL_BIN);
+    apply_vendor_prefix(&mut run);
     run.args(command_args("-r", library))
         .args(std_flags)
         .arg(top)
@@ -578,6 +607,7 @@ fn analyze_once(file: &Path, library: &str, std_flags: &[String]) -> Result<(), 
         .args(command_args("-a", library))
         .args(std_flags)
         .arg(file);
+    apply_vendor_prefix(&mut command);
     match capture(GHDL_BIN, &mut command) {
         Ok(output) if output.status.success() => Ok(()),
         Ok(output) => Err(lossy(&output.stderr)),
@@ -761,6 +791,31 @@ fn wipe_libraries(dir: &Path) -> Result<(), String> {
 
 #[cfg(test)]
 mod tests {
+    #[test]
+    fn vendor_prefix_face_wires_ghdl_prefix_env() {
+        let mut command = Command::new("true");
+        apply_vendor_prefix_from(&mut command, Some("/tmp/vend"));
+        let pinned = command
+            .get_envs()
+            .find(|(k, _)| *k == std::ffi::OsStr::new("GHDL_PREFIX"))
+            .unwrap();
+        assert_eq!(pinned.1, Some(std::ffi::OsStr::new("/tmp/vend")));
+    }
+
+    #[test]
+    fn unset_or_blank_prefix_leaves_the_env_alone() {
+        let mut command = Command::new("true");
+        apply_vendor_prefix_from(&mut command, None);
+        assert!(command
+            .get_envs()
+            .all(|(k, _)| k != std::ffi::OsStr::new("GHDL_PREFIX")));
+        let mut blank = Command::new("true");
+        apply_vendor_prefix_from(&mut blank, Some("   "));
+        assert!(blank
+            .get_envs()
+            .all(|(k, _)| k != std::ffi::OsStr::new("GHDL_PREFIX")));
+    }
+
     use super::*;
     use crate::blueprint::MalformedLine;
 
