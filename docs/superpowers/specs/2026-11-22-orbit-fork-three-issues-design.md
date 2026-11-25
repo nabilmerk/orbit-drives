@@ -475,3 +475,49 @@ campaign closes at every level.
 Upstream note: the fix rides the fork's trunk; opening the
 chaseruskin/orbit PR is the owner's call (the finding is
 upstream-class, sibling of the parked tokenizer finding).
+
+## The zedboard three-face round closes (2026-11-25, afternoon)
+
+All three sim faces now pass the GRLIB leon3 zedboard systest through
+the shipped drives, each at the 940,860 ns reference figure:
+
+| Face | Verdict | Recipe beyond the parser fix |
+|---|---|---|
+| vivado | `pass` | unchanged (locale + SuSE ncurses legs, batch run) |
+| nvc | `pass` | `ORBIT_DRIVES_NVC_FLAGS="-H 64m"` -- nvc's default 16 MB heap dies at init against the unisim RAMB36E1 primitive processes and the stub's 1 MB srec-loaded array |
+| ghdl | `pass` | the vendor-unisim completion path (below) + `ORBIT_DRIVES_GHDL_ASSERT_LEVEL=failure` (the drive's documented GRLIB recipe: the default `error` pin halts the sim at 0 ms on the bridge's severity-error noise) |
+
+The ghdl vendor-unisim gap (parked 2026-11-22) resolved through ghdl's
+own vendor flow: `scripts/vendors/compile-xilinx-vivado.sh --unisim
+--vhdl93` (ghdl-src) over a merged source tree -- the ISE-era
+primitives (RAMB16_S*, DCM, DSP48, the old pads) from Vivado's
+`ids_lite/ISE/vhdl/src/unisims` plus the modern 7-series files
+(PLLE2_ADV, RAMB36E1/18E1) the wrappers reference, with the ISE-era
+`unisim_VCOMP.vhd` (the modern 2025.2 tree dropped the old components).
+The 93-standard cf consumed through a `GHDL_PREFIX` mirror
+(`<demo>/ghdl-prefix`: std/ieee/grt symlinks + `unisim/v93/`), which
+ghdl 6's loader searches as `<prefix>/<lib>/v93/<lib>-obj93.cf` --
+same std as the design rows, so no cross-std suffix mismatch. The
+retarget VCOMP the script demands rides as a byte-copy of the real
+VCOMPONENTS (the thin retarget package otherwise shadows `vcomponents`
+in library unisim and the old components vanish). Source tree and
+prefix stabilize at `<demo>/ghdl-unisim-src` and `<demo>/ghdl-prefix`.
+
+The ghdl loader window-clear hang (parked against ghdl-LLVM/mcode,
+2026-11-22) did NOT reproduce on ghdl 6.0 Dunoon for this design: the
+systest ran clean through every subtest. The upstream probe remains
+open for older ghdl.
+
+A second orbit fix landed in service of the ghdl check: the plan
+closure now rides whole files (`expand_order_to_file_closure`,
+trunk c2e226c7) -- a planned file carries the dependencies of every
+design unit it declares, because file-oriented tools analyze whole
+files: ghdl refused the planned `pads_unisim.vhd` over its tristate
+pad's `use unisim.OBUFT` while the unit-granular walk never pulled
+`OBUFT.vhd` (nvc masked the same gap with its precompiled vendor
+unisim). TDD: `s14`'s `aux_pkg` regression (a multi-unit file's
+unreachable unit's cross-file use-clause must still ride the
+blueprint), seen failing at exit 101 before the fix. Gates: 173
+inline, 15 system scripts, and the three face verdicts re-run green
+after install. The upstream PR for this second fix is the owner's
+call; #30 carries the parser fix only.

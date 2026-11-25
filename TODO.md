@@ -15,6 +15,9 @@
 - the ghdl window-clear mis-execution: ghdl-LLVM and ghdl-mcode both
   never terminate the GRLIB loader's register-window clear loop; nvc
   terminates it in 8 iterations. Upstream ghdl issue pending.
+  UPDATE 2026-11-25: ghdl 6.0.0 Dunoon did NOT reproduce the hang for
+  the zedboard leon3mp systest -- it passed end-to-end at 940,860 ns;
+  the upstream probe remains for older ghdl editions.
 - the cocotb diagnostics' /tmp literal paths: probe-face text only, but
   worth a path-sep pass.
 - the Vivado recipe is Linux-probed (the SuSE ncurses env legs); the
@@ -31,14 +34,11 @@
   one process (cargo runs the harness's threads in one process): a
   pre-existing race the cocotb ALLHDL test's timing surfaced — key the
   dirs by test name instead.
-- the ghdl vendor-unisim completion path, probed 2026-11-22 on Vivado
-  2025.2.1: the declarations ride (`unisim` project, VCOMPONENTS only),
-  the techmap wrappers need the primitive entities, whose recipe is
-  `--std=08 -fsynopsys -frelaxed` — but this Vivado's `vital2000`
-  sources are absent and `unisim_VITAL/SMODEL` were dropped, so the
-  full primitive set cannot compile here; obtain vital2000 (ghdl-src
-  ships a copy) or use Vivado's precompiled xsim flow (which works and
-  is the corpus's reference run).
+- RESOLVED 2026-11-25: the ghdl vendor-unisim completion path -- the
+  recipe lives in the campaign record (ghdl's vendors script over the
+  merged ISE+modern source tree at `<demo>/ghdl-unisim-src`, cf
+  consumed through the `GHDL_PREFIX` mirror at `<demo>/ghdl-prefix`);
+  the zedboard ghdl face passes end-to-end.
 - orbit's symbol parser rejects multi-dimensional array type
   constraints (`array (integer range <>, integer range <>) of ...`,
   VHDL-2008) — the vendor `unisim_VPKG.vhd` is unplannable
