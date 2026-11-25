@@ -1024,10 +1024,16 @@ mod tests {
             .find(|(k, _)| k == "LD_LIBRARY_PATH")
             .unwrap()
             .1;
-        assert_eq!(
-            ld.to_string_lossy(),
-            "/opt/2025.2.1/Vivado/lib/lnx64.o/SuSE:/home/nabil/tools/lib:"
-        );
+        // the expectation derives through the same Path::join calls (the
+        // platform's own separators, never a hardcoded one)
+        let mut expected = Path::new("/opt/2025.2.1/Vivado")
+            .join("lib")
+            .join("lnx64.o")
+            .join("SuSE")
+            .into_os_string();
+        expected.push(":");
+        expected.push("/home/nabil/tools/lib:");
+        assert_eq!(ld, expected);
     }
 
     #[test]
