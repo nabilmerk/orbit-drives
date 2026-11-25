@@ -12,12 +12,15 @@
   faces; the live three-arm proof rides the ghdl shape suite).
 - RESOLVED 2026-11-22: the cocotb/quartus ALLHDL raw-filter bug — both
   sim faces route by the row's extension now (probed live on cocotb).
-- the ghdl window-clear mis-execution: ghdl-LLVM and ghdl-mcode both
-  never terminate the GRLIB loader's register-window clear loop; nvc
-  terminates it in 8 iterations. Upstream ghdl issue pending.
-  UPDATE 2026-11-25: ghdl 6.0.0 Dunoon did NOT reproduce the hang for
-  the zedboard leon3mp systest -- it passed end-to-end at 940,860 ns;
-  the upstream probe remains for older ghdl editions.
+- RESOLVED 2026-11-25 (falsified): the ghdl window-clear
+  "mis-execution" -- the Nov 22 probe ran under the starved-analysis
+  era (287 duplicate-row-starved files, the std-pin wall, unprovisioned
+  vendor entities: partial sets elaborate undriven models, and a loader
+  loop fed undriven data never exits). The SAME ghdl binary
+  (/usr/local/bin/ghdl, built 2026-03-07) now passes the systest at the
+  reference figure on complete closures. No ghdl bug; no upstream
+  issue. Re-open only if a hang resurfaces on a verified-complete
+  analysis set.
 - the cocotb diagnostics' /tmp literal paths: probe-face text only, but
   worth a path-sep pass.
 - the Vivado recipe is Linux-probed (the SuSE ncurses env legs); the

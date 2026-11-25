@@ -505,8 +505,12 @@ prefix stabilize at `<demo>/ghdl-unisim-src` and `<demo>/ghdl-prefix`.
 
 The ghdl loader window-clear hang (parked against ghdl-LLVM/mcode,
 2026-11-22) did NOT reproduce on ghdl 6.0 Dunoon for this design: the
-systest ran clean through every subtest. The upstream probe remains
-open for older ghdl.
+systest ran clean through every subtest. Falsified the same day: the
+installed ghdl binary predates the Nov 22 probe by months (built
+2026-03-07), so the same backend hung then and passes now -- the
+variable was the starved-analysis era's partial sets (undriven models
+starve the loader loop), not a ghdl defect. The upstream issue is not
+warranted; re-open only on a verified-complete analysis set hanging.
 
 The provisioning rode a hand-set `GHDL_PREFIX` that day; it ships as a
 face now -- `ORBIT_DRIVES_GHDL_VENDOR_PREFIX` (orbit-drives
