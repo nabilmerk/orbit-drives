@@ -45,6 +45,23 @@
   the `ORBIT_DRIVES_GHDL_VENDOR_PREFIX` face (2026-11-25): the drive
   detects the external libraries from the blueprint and wires the
   prefix itself, exit-2 with a hint when unprovisioned.
+  SUPERSEDED the same day: the provisioning is orbit-native now -- the
+  vendor primitives ride as blueprint rows (the `vpkg` keyword fix +
+  the file-closure expansion opened the path), compiled per-run into
+  the target dir; no prefix, no external dirs. The face stays for
+  corpora whose vendor libraries cannot ride as rows.
+- RESOLVED 2026-11-25 (the corpus-wide validation): the full ALLHDL
+  sweep -- 466 files, every project in the graph -- analyzes completely
+  and passes the systest on ghdl AND nvc at zero shell exports. The
+  ghdl face is the one that hung on Nov 22; the same binary now
+  completes it (the hang was the starved-analysis era, falsified
+  above). The recipe per target dir: stage the systest's `ram.srec`
+  (the stub backdoor-loads it from the run cwd). Two primitives absent
+  from this Vivado's ISE tree (`ODDRC3E`, `ODDRV2`) are harmless: the
+  ddr wrappers referencing them analyze unbound and never elaborate
+  for this design. vivado's corpus compile runs at reference speed on
+  the batch recipe; its wall clock exceeds an interactive timeout, run
+  it in the background.
 - orbit's symbol parser rejects multi-dimensional array type
   constraints (`array (integer range <>, integer range <>) of ...`,
   VHDL-2008) — the vendor `unisim_VPKG.vhd` is unplannable
