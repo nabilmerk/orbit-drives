@@ -484,7 +484,7 @@ the shipped drives, each at the 940,860 ns reference figure:
 | Face | Verdict | Recipe beyond the parser fix |
 |---|---|---|
 | vivado | `pass` | unchanged (locale + SuSE ncurses legs, batch run) |
-| nvc | `pass` | `ORBIT_DRIVES_NVC_FLAGS="-H 64m"` -- nvc's default 16 MB heap dies at init against the unisim RAMB36E1 primitive processes and the stub's 1 MB srec-loaded array |
+| nvc | `pass` | `ORBIT_DRIVES_NVC_HEAP="64m"` (the dedicated face; `-H 64m` also rides the flags face) -- nvc's default 16 MB heap dies at init against the unisim RAMB36E1 primitive processes and the stub's 1 MB srec-loaded array |
 | ghdl | `pass` | the vendor-unisim completion path (below) + `ORBIT_DRIVES_GHDL_ASSERT_LEVEL=failure` (the drive's documented GRLIB recipe: the default `error` pin halts the sim at 0 ms on the bridge's severity-error noise) |
 
 The ghdl vendor-unisim gap (parked 2026-11-22) resolved through ghdl's
